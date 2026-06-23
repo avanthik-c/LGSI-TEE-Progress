@@ -22,13 +22,10 @@ optee_examples/
 ```
 
 ## OUTPUT
-Normal World:
-![Normal World Shift Cipher Output](screenshots/normal_world_shift_cipher.png)
 
-
-Secure World:
-![Secure World Shift Cipher Output](screenshots/secure_world_shift_cipher.png)
-
+| Normal World (Client App) | Secure World (Trusted App) |
+| :---: | :---: |
+| <img src="screenshots/normal_world_shift_cipher.png" width="450"> | <img src="screenshots/secure_world_shift_cipher.png" width="450"> |
 
 ---
 
