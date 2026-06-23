@@ -21,16 +21,13 @@ optee_examples/
             └── shift_cipher_ta.h
 ```
 
-## Output
-```markdown
+## OUTPUT
 Normal World:
 ![Normal World Shift Cipher Output](screenshots/normal_world_shift_cipher.png)
 
 
 Secure World:
 ![Secure World Shift Cipher Output](screenshots/secure_world_shift_cipher.png)
-
-```
 
 
 ---
