@@ -22,7 +22,7 @@ optee_examples/
 ```
 
 ## Output
-```
+```markdown
 Normal World:
 ![Normal World Shift Cipher Output](screenshots/normal_world_shift_cipher.png)
 
