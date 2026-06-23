@@ -25,7 +25,7 @@ optee_examples/
 
 | Normal World (Client App) | Secure World (Trusted App) |
 | :---: | :---: |
-| <img src="screenshots/normal_world_shift_cipher.png" width="450"> | <img src="screenshots/secure_world_shift_cipher.png" width="450"> |
+| <img src="../../Amith/screenshots/normal_world_shift_cipher.png" width="450"> | <img src="../../Amith/screenshots/secure_world_shift_cipher.png" width="450"> |
 
 ---
 
