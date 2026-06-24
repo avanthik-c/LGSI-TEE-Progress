@@ -117,6 +117,8 @@ int main(void){
     int fd;             The Linux file descriptor (e.g., pointing to /dev/tee0)
     bool reg_mem;       take memory you've already created in your normal Linux application (like with a 
                         standard malloc()) and simply "register" it with the Secure World so both sides can see it.
+                        true-support zero copy
+                        false-doesnt support
     bool memref_null;   If it's true, the system lets you share your own app's memory. 
                         If it's false, you are forced to use the TEE's special memory pool.
     } TEEC_Context;*/               
@@ -155,12 +157,13 @@ int main(void){
 	
     // changeable
     // &uuid - changes according to the TA we are opening
-    // TEEC_LOGIN_PUBLIC (The Bouncer) - access control mechanism
+    // TEEC_LOGIN_PUBLIC (The Bouncer) - login type
     //     TEEC_LOGIN_PUBLIC means any program on Linux can open session to the TAs . 
     //     TEEC_LOGIN_USER Only a specific Linux user (like the root user) is allowed to open the session.
     //     TEEC_LOGIN_GROUP Only programs belonging to a specific Linux user group can access the TA.
-    // operation - pass payload at this stage
-    // connection data - pass data regarding connection data
+    // connection data - pass data regarding login type
+    // operation - pass payload at this stage which is needed before we opensession
+    //      can be passwords so TA can verify user or details about resolutions in case of video decryption
     if (res != TEEC_SUCCESS) errx(1, "TEEC_Opensession failed with code 0x%x origin 0x%x",res, err_origin);
 	memset(&op, 0, sizeof(op)); // clean the region,setting it all 0s
     
