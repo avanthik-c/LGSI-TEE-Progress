@@ -1,172 +1,193 @@
-# Menu-Driven RSA Algorithm in C
+# RSA Implementation in OP-TEE
 
-## Source Code
+## Objective
+To implement the RSA cryptographic algorithm inside the Trusted Execution Environment (TEE) using OP-TEE and QEMU, ensuring that encryption and decryption operations are executed securely within the Secure World.
+
+## Introduction
+RSA is an asymmetric cryptographic algorithm that uses two keys:
+
+- **Public Key** – Used for encryption
+- **Private Key** – Used for decryption
+
+In this implementation, RSA operations are performed inside the Trusted Application (TA), while the Host Application (CA) runs in the Normal World and communicates with the TA using the TEE Client API.
+
+---
+
+## OP-TEE Architecture
+
+### Host Application (Normal World)
+
+The Host Application is responsible for:
+
+- Creating a TEE Context
+- Opening a Session with the Trusted Application
+- Taking user input
+- Invoking commands in the Trusted Application
+- Displaying the results
+
+### Trusted Application (Secure World)
+
+The Trusted Application is responsible for:
+
+- Generating RSA key pairs
+- Performing RSA encryption
+- Performing RSA decryption
+- Returning results securely to the Host Application
+
+---
+
+## Code Flow
+
+### Step 1: Initialize TEE Context
+
+The Host Application establishes communication with OP-TEE.
 
 ```c
-#include <stdio.h>
-#include <math.h>
-
-int gcd(int a, int b) {
-    while (b != 0) {
-        int temp = b;
-        b = a % b;
-        a = temp;
-    }
-    return a;
-}
-
-int modInverse(int e, int phi) {
-    for (int d = 1; d < phi; d++) {
-        if ((e * d) % phi == 1)
-            return d;
-    }
-    return -1;
-}
-
-long long modExp(long long base, long long exp, long long mod) {
-    long long result = 1;
-    while (exp > 0) {
-        result = (result * base) % mod;
-        exp--;
-    }
-    return result;
-}
-
-int main() {
-    int p, q, n, phi, e, d;
-    long long message, cipher, decrypted;
-    int choice;
-    int keysGenerated = 0;
-
-    while (1) {
-        printf("\n===== RSA MENU =====\n");
-        printf("1. Generate Keys\n");
-        printf("2. Encrypt Message\n");
-        printf("3. Decrypt Ciphertext\n");
-        printf("4. Exit\n");
-        printf("Enter your choice: ");
-        scanf("%d", &choice);
-
-        switch (choice) {
-
-        case 1:
-            printf("Enter prime number p: ");
-            scanf("%d", &p);
-
-            printf("Enter prime number q: ");
-            scanf("%d", &q);
-
-            n = p * q;
-            phi = (p - 1) * (q - 1);
-
-            for (e = 2; e < phi; e++) {
-                if (gcd(e, phi) == 1)
-                    break;
-            }
-
-            d = modInverse(e, phi);
-
-            printf("\nPublic Key (e, n) = (%d, %d)\n", e, n);
-            printf("Private Key (d, n) = (%d, %d)\n", d, n);
-
-            keysGenerated = 1;
-            break;
-
-        case 2:
-            if (!keysGenerated) {
-                printf("Generate keys first!\n");
-                break;
-            }
-
-            printf("Enter message (number less than %d): ", n);
-            scanf("%lld", &message);
-
-            cipher = modExp(message, e, n);
-
-            printf("Encrypted Ciphertext = %lld\n", cipher);
-            break;
-
-        case 3:
-            if (!keysGenerated) {
-                printf("Generate keys first!\n");
-                break;
-            }
-
-            printf("Enter ciphertext: ");
-            scanf("%lld", &cipher);
-
-            decrypted = modExp(cipher, d, n);
-
-            printf("Decrypted Message = %lld\n", decrypted);
-            break;
-
-        case 4:
-            printf("Exiting...\n");
-            return 0;
-
-        default:
-            printf("Invalid choice!\n");
-        }
-    }
-
-    return 0;
-}
+TEEC_InitializeContext(NULL, &ctx);
 ```
 
-## Compilation
+**Purpose:**
+- Connects the Client Application to the TEE.
 
-```bash
-gcc rsa.c -o rsa
-./rsa
+### Step 2: Open Session
+
+```c
+TEEC_OpenSession(
+    &ctx,
+    &sess,
+    &uuid,
+    TEEC_LOGIN_PUBLIC,
+    NULL,
+    NULL,
+    NULL);
 ```
 
-## Sample Execution
+**Purpose:**
+- Opens a secure session with the Trusted Application.
 
-```text
-===== RSA MENU =====
-1. Generate Keys
+### Step 3: Display Menu
+
+The Host Application displays a menu:
+
+1. Generate RSA Key Pair
 2. Encrypt Message
-3. Decrypt Ciphertext
+3. Decrypt Message
 4. Exit
 
-Enter your choice: 1
+The user selects an operation.
 
-Enter prime number p: 3
-Enter prime number q: 11
+### Step 4: Invoke Trusted Application
 
-Public Key (e, n) = (3, 33)
-Private Key (d, n) = (7, 33)
-
-Enter your choice: 2
-Enter message (number less than 33): 5
-
-Encrypted Ciphertext = 26
-
-Enter your choice: 3
-Enter ciphertext: 26
-
-Decrypted Message = 5
+```c
+TEEC_InvokeCommand(
+    &sess,
+    CMD_RSA_GENERATE,
+    &op,
+    &err_origin);
 ```
 
-## RSA Formula
+**Purpose:**
+- Sends commands from the Client Application to the Trusted Application.
 
-- \( n = p \times q \)
-- \( \phi(n) = (p-1)(q-1) \)
-- Choose \( e \) such that \( gcd(e, \phi(n)) = 1 \)
-- Find \( d \) such that:
+### Step 5: RSA Key Generation in TA
 
-```text
-(e × d) mod φ(n) = 1
+Inside the Trusted Application:
+
+```c
+TEE_AllocateTransientObject(
+    TEE_TYPE_RSA_KEYPAIR,
+    1024,
+    &rsa_keypair);
 ```
 
-### Encryption
+Generate the key pair:
 
-```text
-C = M^e mod n
+```c
+TEE_GenerateKey(
+    rsa_keypair,
+    1024,
+    NULL,
+    0);
 ```
 
-### Decryption
+**Purpose:**
+- Generates RSA public and private keys securely inside the TEE.
 
-```text
-M = C^d mod n
+### Step 6: RSA Encryption
+
+The plaintext received from the Host Application is encrypted using the public key.
+
+```c
+TEE_AsymmetricEncrypt(
+    operation,
+    NULL,
+    0,
+    plaintext,
+    plaintext_len,
+    ciphertext,
+    &ciphertext_len);
 ```
+
+**Output:**
+- Ciphertext generated securely inside the Trusted Application.
+
+### Step 7: RSA Decryption
+
+Ciphertext is sent back to the Trusted Application.
+
+```c
+TEE_AsymmetricDecrypt(
+    operation,
+    NULL,
+    0,
+    ciphertext,
+    ciphertext_len,
+    plaintext,
+    &plaintext_len);
+```
+
+**Output:**
+- Original plaintext recovered securely.
+
+### Step 8: Return Result
+
+The encrypted or decrypted data is returned to the Host Application through shared memory buffers.
+
+### Step 9: Close Session
+
+```c
+TEEC_CloseSession(&sess);
+TEEC_FinalizeContext(&ctx);
+```
+
+**Purpose:**
+- Closes the secure session and releases allocated resources.
+
+
+---
+
+## Security Advantages of OP-TEE
+
+- Private key never leaves the Secure World.
+- RSA operations execute entirely inside the Trusted Application.
+- Sensitive data is protected from Normal World applications.
+- Secure communication is maintained between the Client Application and Trusted Application.
+
+---
+
+## Project Output
+
+The implementation successfully demonstrated:
+
+- RSA Key Generation
+- RSA Encryption
+- RSA Decryption
+- Secure execution inside OP-TEE running on QEMU
+
+
+
+---
+
+## Conclusion
+
+RSA was successfully implemented inside OP-TEE using the Client Application and Trusted Application architecture. The Host Application handled user interaction, while all cryptographic operations were executed securely inside the Trusted Application. This implementation provided a secure foundation for exploring Post-Quantum Cryptography algorithms such as ML-KEM within the Trusted Execution Environment.
