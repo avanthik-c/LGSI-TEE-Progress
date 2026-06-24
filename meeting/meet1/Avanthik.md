@@ -96,8 +96,8 @@ hello_world
     ├── Makefile
     ├── hello_world_ta.c
     ├── include
-    │   └── hello_world_ta.h
-    ├── sub.mk
+    │   └── hello_world_ta.h      # uuid 
+    ├── sub.mk                    # build file for secure world
     └── user_ta_header_defines.h
 ```
 ## Host Program Breakdown
