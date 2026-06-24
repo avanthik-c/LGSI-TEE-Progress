@@ -1,5 +1,5 @@
 # LGSI-TEE-Daily-Progress
-Daily Progress Tracker for LGSI TEE project 
+Progress Tracker for LGSI TEE project 
 ## Team Members
 - Member 1 - Avanthik C
 - Member 2 - Amith K S
