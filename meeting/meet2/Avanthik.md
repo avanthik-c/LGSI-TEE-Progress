@@ -1,4 +1,4 @@
-** I have tried to add a sample program as part of the OPTEE kernel which is called using Psuedo Trusted Application **
+**I have tried to add a sample program as part of the OPTEE kernel which is called using Psuedo Trusted Application**
 
 ## Function
 
@@ -49,18 +49,20 @@ int custom_add(int a, int b) {
 ```c
 #ifndef SAMPLE_H
 #define SAMPLE_H
-
 // The prototype that tells the PTA what the function looks like
 int custom_add(int a, int b);
 
 #endif
 ```
 ### Compile
-- add in sub.mk `/optee-qemu/optee_os/core/crypto/sub.mk`
-`srcs-y += sample.c`
-srcs tells the build system this is a source file.
--y means "yes, compile this file unconditionally."
-+= appends your file to the existing list of files OP-TEE is already building in that folder.
+- append below code in sub.mk `/optee-qemu/optee_os/core/crypto/sub.mk`
+
+```c
+srcs-y += sample.c
+```
+- srcs tells the build system this is a source file.
+- -y means "yes, compile this file unconditionally.
+- += appends your file to the existing list of files OP-TEE is already building in that folder.
 
 ## PTA
 
@@ -113,13 +115,12 @@ static TEE_Result invoke_command(void *session __maybe_unused,uint32_t cmd_id,ui
 }
 
 // 3. Register the PTA with the Kernel
-// This macro is the "birth certificate" for your PTA.
 pseudo_ta_register(.uuid = PTA_MY_CRYPTO_UUID, 
                    .name = "my_crypto_pta",
                    .flags = PTA_DEFAULT_FLAGS,
                    .invoke_command_entry_point = invoke_command);//mentioning which function to run on uuid accessing
 
-// kernel has a routing table which matches uuod with respective files for easier searching
+// kernel has a routing table which matches uuid with respective files for easier searching
 // this is used to do that while compiling 
 ```
 ### Compile
@@ -207,13 +208,17 @@ TEE_Result TA_InvokeCommandEntryPoint(void __maybe_unused *sess_ctx,uint32_t cmd
     if (cmd_id == TA_HELLO_WORLD_CMD_INC_VALUE) {
         TEE_Result res;
         TEE_TASessionHandle pta_session;
-        uint32_t ret_origin;
+        uint32_t ret_origin; //error tracking
         TEE_UUID pta_uuid = PTA_MY_CRYPTO_UUID;
 
         DMSG("TA: Received request from CA, opening session to Kernel PTA...");
 
         // Open a session to the Kernel PTA
         res = TEE_OpenTASession(&pta_uuid, TEE_TIMEOUT_INFINITE, 0, NULL, &pta_session, &ret_origin);
+        //TEE_TIMEOUT_INFINITE
+        // time taken to create session and the values to return from openTAsession
+        // theres no opensessionentrypoint in PTA as it is part of kernel
+        //NULL (Shared Memory) - TEE_PARAMS struct for sharing data
         if (res != TEE_SUCCESS) {
             EMSG("TA: Failed to open PTA session");
             return res;
@@ -221,7 +226,7 @@ TEE_Result TA_InvokeCommandEntryPoint(void __maybe_unused *sess_ctx,uint32_t cmd
 
         // Forward the exact parameters (A and B) to the Kernel PTA
         res = TEE_InvokeTACommand(pta_session, TEE_TIMEOUT_INFINITE, PTA_CMD_ADD_NUMBERS,param_types, params, &ret_origin);
-
+        //TEE_TIMEOUT_INFINITE - time between funct call and value returned from it
         // Close the connection to the kernel
         TEE_CloseTASession(pta_session);
         
@@ -246,19 +251,19 @@ void TA_CloseSessionEntryPoint(...) {
 }
 ```
 high level execution flow
-CA -> TA -> PTA -> kernel function
-questions that come to mind: why can CA access TA but TA cant access custom_add() directly ,instead need PTA?
-Answer:
-Priveledge levels
-EL0:user space
-EL1:kernel space
+CA -> TA -> PTA -> kernel function 
+- questions that come to mind: why can CA access TA but TA cant access custom_add() directly ,instead need PTA?
+- Answer:
+- Priveledge levels
+- EL0:user space
+- EL1:kernel space
 
-CA and TA are user space applications so there isnt an issue
+- CA and TA are user space applications so there isnt an issue
 but still due to security EL0(CA) -> EL1(linux) -> EL3(Secure monitor) -> EL1(OPTEE) -> EL0(TA)
 
-custom_add lies in kernel code hence EL0(TA) cant access memory pointing to EL1(OPTEE kernel) directly hence use PTA
+- custom_add lies in kernel code hence EL0(TA) cant access memory pointing to EL1(OPTEE kernel) directly hence use PTA
 
-To prevent a bad TA from crashing the secure kernel or stealing data, the hardware strictly isolates EL0 from EL1. A user-space application (TA) cannot directly execute a memory address that belongs to the kernel. If it tries, the CPU hardware will literally block the execution and trigger a fatal "Segmentation Fault," killing the TA instantly.
+- To prevent a bad TA from crashing the secure kernel or stealing data, the hardware strictly isolates EL0 from EL1. A user-space application (TA) cannot directly execute a memory address that belongs to the kernel. If it tries, the CPU hardware will literally block the execution and trigger a fatal "Segmentation Fault," killing the TA instantly.
 
-EL0(TA) issues harware interrupt to execute kernel code
-TEE_InvokeTACommand is the trigger for that interrupt
+- EL0(TA) issues harware interrupt to execute kernel code
+- TEE_InvokeTACommand is the trigger for that interrupt
