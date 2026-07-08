@@ -1,4 +1,4 @@
-*** I have tried to add a sample program as part of the OPTEE kernel which is called using Psuedo Trusted Application ***
+** I have tried to add a sample program as part of the OPTEE kernel which is called using Psuedo Trusted Application **
 
 ## Function
 
