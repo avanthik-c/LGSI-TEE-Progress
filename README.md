@@ -5,6 +5,7 @@ Progress Tracker for LGSI TEE project
 - Member 2 - Amith K S
 - Member 3 - Sathya Prathmesh K J
 - Mentor - Jevitha K.P
+- Mentor - Chungath Srinivasan
 
 ## Setting Up the repo 
 Clone the following into your desired folder 
