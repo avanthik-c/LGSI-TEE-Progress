@@ -4,7 +4,10 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'mlkem_native_bench/**'
+      - 'Amith/Proper_Benchmark/**'
+  pull_request:
+    paths:
+      - 'Amith/Proper_Benchmark/**'
 
 jobs:
   test-arm64:
@@ -19,16 +22,18 @@ jobs:
 
       - name: Build
         run: |
-          cd mlkem_native_bench
+          cd Amith/Proper_Benchmark/mlkem_native_bench
+          rm -f bench_mlkem_c bench_mlkem_native
           make all
 
       - name: Run portable benchmark
         run: |
-          cd mlkem_native_bench
+          cd Amith/Proper_Benchmark/mlkem_native_bench
           ./bench_mlkem_c
 
       - name: Run native benchmark
         run: |
-          cd mlkem_native_bench
+          cd Amith/Proper_Benchmark/mlkem_native_bench
           ./bench_mlkem_native
+
 
