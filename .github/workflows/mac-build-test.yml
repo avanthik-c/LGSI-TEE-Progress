@@ -32,27 +32,3 @@ jobs:
           cd mlkem_native_bench
           ./bench_mlkem_native
 
-  test-intel:
-    name: Intel (x86_64)
-    runs-on: macos-13
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: Show architecture
-        run: uname -m
-
-      - name: Build
-        run: |
-          cd mlkem_native_bench
-          make all
-
-      - name: Run portable benchmark
-        run: |
-          cd mlkem_native_bench
-          ./bench_mlkem_c
-
-      - name: Run native benchmark
-        run: |
-          cd mlkem_native_bench
-          ./bench_mlkem_native
