@@ -1,11 +1,11 @@
 .DS_Store
 
-mlkem_native_bench/bench_mlkem_c
-mlkem_native_bench/bench_mlkem_native
-pqclean_bench/bench_pqclean
+**/mlkem_native_bench/bench_mlkem_c
+**/mlkem_native_bench/bench_mlkem_native
+**/pqclean_bench/bench_pqclean
 
-mlkem_native_bench/*.csv
-pqclean_bench/*.csv
+**/mlkem_native_bench/*.csv
+**/pqclean_bench/*.csv
 
 *.csv
-!results/combined.csv
+!**/results/combined.csv
