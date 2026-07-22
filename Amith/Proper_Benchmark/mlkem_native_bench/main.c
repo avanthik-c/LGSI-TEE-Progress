@@ -91,9 +91,12 @@ int main(void) {
     FILE *csv = fopen(OUT_FILE, "w");
     fprintf(csv, "library,operation,iter,microseconds\n");
     /* Warm-up (not recorded) */
-    for (i = 0; i < WARMUP_ITERS; i++) {
-        crypto_kem_keypair(pk, sk);
+   
+    double warmup_start = now_us();
+    while (now_us() - warmup_start < 100000.0 /* 100 ms */) {
+    	crypto_kem_keypair(pk, sk);
     }
+
     /* Keygen */
     for (i = 0; i < NUM_ITERS; i++) {
         double t0 = now_us();

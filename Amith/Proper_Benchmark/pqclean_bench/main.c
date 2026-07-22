@@ -86,9 +86,11 @@ int main(void) {
     FILE *csv = fopen("results_pqclean.csv", "w");
     fprintf(csv, "library,operation,iter,microseconds\n");
     /* Warm-up (not recorded) */
-    for (i = 0; i < WARMUP_ITERS; i++) {
-        PQCLEAN_MLKEM512_CLEAN_crypto_kem_keypair(pk, sk);
-    }
+   
+    double warmup_start = now_us();
+    while (now_us() - warmup_start < 100000.0 /* 100 ms */) {
+    	PQCLEAN_MLKEM512_CLEAN_crypto_kem_keypair(pk, sk);
+    } 
     /* Keygen */
     for (i = 0; i < NUM_ITERS; i++) {
         double t0 = now_us();
