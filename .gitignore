@@ -9,4 +9,5 @@
 
 *.csv
 !**/results/combined.csv
-*.png
+**/Proper_Benchmark/results/*.png
+
