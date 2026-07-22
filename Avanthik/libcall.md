@@ -49,7 +49,7 @@ so ta can execute crypto function without accessing kernel or triggering any sys
 other method is using the TEE API call TEE_AllocateOperation to call specific crypto functions
 
 
-### GLlobal APIS
+### Global APIS
 
 - Sample global api snippet
 ```c
