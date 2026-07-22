@@ -165,9 +165,6 @@ architecture-accelerated result (`mlkem-native-x86_64`, `mlkem-native-aarch64`, 
 per the `LIB_NAME` macro). Comparing the two CSVs is the actual speedup measurement.
 
 ---
-
-| <img src="screenshots/distribution_boxplots.png" width="450"> | <img src="screenshots/timing_comparison.png" width="450"> |
-
-
+| <img src="../../Amith/screenshots/distribution_boxplots.png" width="450"> | <img src="../../Amith/screenshots/timing_comparison.png" width="450"> |
 
 
