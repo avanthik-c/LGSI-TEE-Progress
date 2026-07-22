@@ -49,16 +49,7 @@ so ta can execute crypto function without accessing kernel or triggering any sys
 other method is using the TEE API call TEE_AllocateOperation to call specific crypto functions
 
 
-### TEE_Allocateoperation
-
-```c
-TEE_Result TEE_AllocateOperation(
-    TEE_OperationHandle *operation,
-    uint32_t algorithm,
-    uint32_t mode,
-    uint32_t maxKeySize
-);
-```
+### GLlobal APIS
 
 - Sample global api snippet
 ```c
@@ -129,12 +120,12 @@ thi holds the TAs
 
 function flow:
 
-`TEE_AllocateOperation(&op_handle, TEE_ALG_AES_CBC_NOPAD, TEE_MODE_ENCRYPT, key_bit_size);`
+- `TEE_AllocateOperation(&op_handle, TEE_ALG_AES_CBC_NOPAD, TEE_MODE_ENCRYPT, key_bit_size);`
 the parameters are in variable stack
 once the function called the execution ponter jumps to libutee library
 where this function is described
 what happens
-`struct __TEE_OperationHandle` object allocated using malloc
+- `struct __TEE_OperationHandle` object allocated using malloc
 copies the parameters into this object
 then moves 
 syscall id to x0 register
@@ -148,7 +139,7 @@ and return a stateid in x0 to ta space ,stored in the struct object
 this struct object is then given a pointer `op_handle`(which was null till now)
 now for future interaction we need stateID
 
-`TEE_AllocateTransientObject(TEE_TYPE_AES, key_bit_size, &key_handle);`
+- `TEE_AllocateTransientObject(TEE_TYPE_AES, key_bit_size, &key_handle);`
 function call->libutee mallocs `struct __TEE_ObjectHandle` object
 populates data objectType (AES) and maxObjectSize (256).
 loads the CPU registers:
@@ -167,7 +158,7 @@ The kernel places objectID  into register x0 and returns to EL0.
 libutee takes 99 and saves it inside the struct __TEE_ObjectHandle on your TA's heap.
 Finally, libutee sets your TA's key_handle pointer to point to this heap struct.
 
-`TEE_PopulateTransientObject(key_handle, &attr, 1);`->libutee
+- `TEE_PopulateTransientObject(key_handle, &attr, 1);`->libutee
 then loads values intot register
 x0 = System Call ID 
 x1 = objectID (#99)
@@ -178,7 +169,7 @@ The kernel uses a safe copy routine (like copy_from_user()) to read the raw key 
 It writes those key bytes into the protected secure memory buffer inside struct tee_obj in kernel RAM.
 
 
-`TEE_SetOperationKey(op_handle, key_handle);`
+- `TEE_SetOperationKey(op_handle, key_handle);`
 libutee
 loads register
 x0 = System Call ID for utee_cryp_state_set_key
@@ -190,11 +181,11 @@ loads the key to the crypto operation ie
 E(k,pt) becomes Ek(pt)
 aldready incorporate the key to the function
 
-`TEE_CipherInit(op_handle, iv_buf, iv_len);`
+- `TEE_CipherInit(op_handle, iv_buf, iv_len);`
 User Space (libutee): The TA invokes the function. libutee sets up the SVC call (utee_cryp_cipher_init), passing stateID (#42) and the user-space address of iv_buf.
 Kernel Boundary: The OP-TEE kernel intercepts the SVC. It looks up struct tee_cryp_state using #42.
 Data Ingestion: The kernel safely copies the 16 bytes from iv_buf into a secure kernel-space buffer.
 
-`TEE_CipherDoFinal(op_handle, src_buf, src_len, dest_buf, dest_len);`
+- `TEE_CipherDoFinal(op_handle, src_buf, src_len, dest_buf, dest_len);`
 
 `
