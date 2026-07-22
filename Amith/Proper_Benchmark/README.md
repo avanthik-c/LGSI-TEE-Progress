@@ -40,9 +40,9 @@ make
 
 # combine + plot
 cd ..
-cat mlkem_native_bench/results_mlkem_native.csv > results/combined.csv
+cat mlkem_native_bench/results_native.csv > results/combined.csv
 tail -n +2 pqclean_bench/results_pqclean.csv >> results/combined.csv
-tail -n +2 mlkem_native_bench/results_mlkem_c.csv >> results/combined.csv
+tail -n +2 mlkem_native_bench/results_c.csv >> results/combined.csv
 pip install matplotlib pandas
 python3 plot_results.py
 ```
