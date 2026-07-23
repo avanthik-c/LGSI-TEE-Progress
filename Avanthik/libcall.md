@@ -182,10 +182,28 @@ E(k,pt) becomes Ek(pt)
 aldready incorporate the key to the function
 
 - `TEE_CipherInit(op_handle, iv_buf, iv_len);`
+loads the IV to the algo
 User Space (libutee): The TA invokes the function. libutee sets up the SVC call (utee_cryp_cipher_init), passing stateID (#42) and the user-space address of iv_buf.
 Kernel Boundary: The OP-TEE kernel intercepts the SVC. It looks up struct tee_cryp_state using #42.
 Data Ingestion: The kernel safely copies the 16 bytes from iv_buf into a secure kernel-space buffer.
 
 - `TEE_CipherDoFinal(op_handle, src_buf, src_len, dest_buf, dest_len);`
 
-`
+pass the pt to the algo and get the result in dest_buffer
+cleanup in kernelspace
+
+libutee
+then load register
+x0	op_handle	The ID number of your engine (#42).
+x1	srcData	RAM address of the final plaintext chunk (or NULL if 0 bytes).
+x2	srcLen	Length of final plaintext chunk (e.g., 5 bytes or 0).
+x3	destData	RAM address of output buffer reserved for final ciphertext + padding.
+x4	&destLen	RAM address where kernel writes the actual final bytes written.
+x8	Syscall ID	The syscall number for UTEE_CRYP_CIPHER_DO_FINAL (e.g., 0x3B).
+call syscall
+
+- Destroy the Cryptographic Engine (operation struct)
+`TEE_FreeOperation(op_handle);`
+
+- Destroy the Secret Key Container (object struct)
+`TEE_FreeTransientObject(key_handle);`
