@@ -11,7 +11,8 @@ import os
 ARCH = platform.machine()
 # Dynamically create the library name expected in the CSV (e.g., "mlkem-native-x86_64", "mlkem-native-aarch64")
 native_lib = f"mlkem-native-{ARCH}"
-
+if(ARCH == 'arm64'):
+    native_lib = "mlkem-native-aarch64"
 # Use relative paths so it works anywhere
 df = pd.read_csv("results/combined.csv", header=None, names=["library", "operation", "run_id", "microseconds"])
 
