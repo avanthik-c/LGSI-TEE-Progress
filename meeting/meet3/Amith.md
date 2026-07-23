@@ -165,6 +165,35 @@ architecture-accelerated result (`mlkem-native-x86_64`, `mlkem-native-aarch64`, 
 per the `LIB_NAME` macro). Comparing the two CSVs is the actual speedup measurement.
 
 ---
-| <img src="../../Amith/screenshots/distribution_boxplots.png" width="450"> | <img src="../../Amith/screenshots/timing_comparison.png" width="450"> |
+| <img src="../../Amith/screenshots/distribution_boxplots.png" width="450"> | <img src="../../Amith/screenshots/timing_comparison.png" width="450"> 
 
 
+## System Specifications
+
+| Component | Specification |
+| :--- | :--- |
+| **System Model** | Lenovo LOQ 15IRX9 (83DV) |
+| **Processor (CPU)** | 13th Gen Intel Core i5-13450HX (14 Cores) @ 4.60 GHz |
+| **Graphics (dGPU)** | NVIDIA GeForce RTX 3050 A Laptop GPU |
+| **Graphics (iGPU)** | Intel Raptor Lake-S UHD Graphics |
+| **Memory (RAM)** | 24 GB Total |
+| **Swap Space** | 4.00 GB |
+| **Display** | 15" 1920x1080 @ 144Hz (Built-in) |
+| **Audio** | Enabled ||
+
+
+| <img src="../../Amith/screenshots/distribution_boxplots (copy 1).png" width="450"> | <img src="../../Amith/screenshots/timing_comparison (copy 1).png" width="450"> 
+
+
+## System Specifications
+
+| Component | Specification |
+| :--- | :--- |
+| **System Model** | Apple MacBook Air (M4, 2025) |
+| **Processor (CPU)** | Apple M4 Chip (10-Core CPU) |
+| **Graphics (dGPU)** | Not Available (No Dedicated GPU) |
+| **Graphics (iGPU)** | Apple M4 Integrated 8-Core GPU |
+| **Memory (RAM)** | 16 GB Unified Memory |
+| **Swap Space** | Dynamic macOS Swap Memory |
+| **Display** | 13.6" 2560 x 1664 @ 60 Hz (Built-in Liquid Retina Display) |
+| **Audio** | Enabled |
