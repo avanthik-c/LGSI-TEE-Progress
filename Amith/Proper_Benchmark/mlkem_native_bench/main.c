@@ -22,16 +22,40 @@
 #ifndef OUT_FILE
 #define OUT_FILE "results_mlkem_native.csv"
 #endif
+
 static double now_us(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (double)ts.tv_sec * 1e6 + (double)ts.tv_nsec / 1e3;
 }
+
 static int cmp_double(const void *a, const void *b) {
     double da = *(const double *)a, db = *(const double *)b;
     return (da > db) - (da < db);
 }
+
 int randombytes(uint8_t *out, size_t outlen) {
+    /* ====================================================================
+     * TEMPORARY HARDCODED NIST KAT SEED
+     * WARNING: DO NOT USE IN PRODUCTION! Revert to original RNG below.
+     * ==================================================================== */
+    static const uint8_t kat_coins[64] = {
+        0x93, 0x4d, 0x60, 0xb3, 0x56, 0x24, 0xd7, 0x40, 0xb3, 0x0a, 0x7f, 0x22,
+        0x7a, 0xf2, 0xae, 0x7c, 0x67, 0x8e, 0x4e, 0x04, 0xe1, 0x3c, 0x5f, 0x50,
+        0x9e, 0xad, 0xe2, 0xb7, 0x9a, 0xea, 0x77, 0xe2, 0x3e, 0x2a, 0x2e, 0xa6,
+        0xc9, 0xc4, 0x76, 0xfc, 0x49, 0x37, 0xb0, 0x13, 0xc9, 0x93, 0xa7, 0x93,
+        0xd6, 0xc0, 0xab, 0x99, 0x60, 0x69, 0x5b, 0xa8, 0x38, 0xf6, 0x49, 0xda,
+        0x53, 0x9c, 0xa3, 0xd0
+    };
+
+    if (outlen <= 64) {
+        memcpy(out, kat_coins, outlen);
+    }
+    return 0;
+    /* ==================================================================== */
+
+#if 0
+    /* ORIGINAL SECURE RNG IMPLEMENTATION - RESTORE FOR REAL KEYGEN */
 #ifdef __APPLE__
     size_t total_read = 0;
     while (total_read < outlen) {
@@ -58,7 +82,9 @@ int randombytes(uint8_t *out, size_t outlen) {
     }
     return 0;
 #endif
+#endif /* End of disabled original RNG */
 }
+
 static void report(const char *label, double *samples, int n, FILE *csv) {
     double sum = 0.0, min = samples[0], max = samples[0];
     int i;
@@ -83,18 +109,20 @@ static void report(const char *label, double *samples, int n, FILE *csv) {
     }
     free(sorted);
 }
+
 int main(void) {
     uint8_t pk[CRYPTO_PUBLICKEYBYTES];
     uint8_t sk[CRYPTO_SECRETKEYBYTES];
     int i;
     double *keygen_t = malloc(NUM_ITERS * sizeof(double));
     FILE *csv = fopen(OUT_FILE, "w");
+    
     fprintf(csv, "library,operation,iter,microseconds\n");
+    
     /* Warm-up (not recorded) */
-   
     double warmup_start = now_us();
     while (now_us() - warmup_start < 100000.0 /* 100 ms */) {
-    	crypto_kem_keypair(pk, sk);
+        crypto_kem_keypair(pk, sk);
     }
 
     /* Keygen */
@@ -103,8 +131,24 @@ int main(void) {
         crypto_kem_keypair(pk, sk);
         keygen_t[i] = now_us() - t0;
     }
+    
     printf("=== mlkem-native ML-KEM-%d (Keygen Only) (N=%d, warmup=%d) ===\n",
            MLK_CONFIG_PARAMETER_SET, NUM_ITERS, WARMUP_ITERS);
+           
+    /* DUMP DETERMINISTIC KEYS TO FILES FOR KAT COMPARISON */
+    FILE *f_pk = fopen("expected_pk.bin", "wb");
+    if (f_pk) {
+        fwrite(pk, 1, sizeof(pk), f_pk);
+        fclose(f_pk);
+    }
+
+    FILE *f_sk = fopen("expected_sk.bin", "wb");
+    if (f_sk) {
+        fwrite(sk, 1, sizeof(sk), f_sk);
+        fclose(f_sk);
+    }
+    printf("[!] Deterministic KAT reference binaries (expected_pk.bin, expected_sk.bin) successfully dumped.\n");
+
     report("keygen", keygen_t, NUM_ITERS, csv);
     fclose(csv);
     free(keygen_t);
