@@ -11,3 +11,5 @@
 !**/results/combined.csv
 **/Proper_Benchmark/results/*.png
 
+*.bin
+*.hex
