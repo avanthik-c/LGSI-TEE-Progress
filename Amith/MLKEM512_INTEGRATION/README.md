@@ -83,26 +83,6 @@ is a plain source subdirectory of `core/` core code, exactly like
 #endif
 ```
 
-**Bug hit here:** the first version of this file set the two
-`USE_NATIVE_BACKEND_*` flags without the two `*_BACKEND_FILE` macros. This
-compiled fine in isolation but failed as soon as `mlkem_native.c` was
-actually built, with the exact `#error` shown above — the two backend flags
-are a "turn this on" switch, and the `_FILE` macros are "and here's the
-header that implements it," and mlkem-native requires both together by
-design (it has no default file to fall back to, since the right header
-differs per architecture/backend combination).
-
-`MLK_CONFIG_NO_RANDOMIZED_API` means the library never generates its own
-randomness internally — every entry point takes explicit randomness as a
-parameter (`coins`), which is filled from OP-TEE's real RNG, never
-mlkem-native's own (host-only, testing-oriented) `randombytes()`.
-
-`MLK_CONFIG_NAMESPACE_PREFIX mlkem` renames every internal symbol from the
-library's default (long, parameter-set-embedding) names to short
-`mlkem_`-prefixed ones — e.g. the callable keygen function becomes
-`mlkem_keypair_derand()` instead of
-`PQCP_MLKEM_NATIVE_MLKEM512_keypair_derand()`.
-
 ### 1.4 `core/mlkem_native/sub.mk`
 
 ```makefile
@@ -584,15 +564,6 @@ In `tee_cryp_obj_props[]`:
 	     sizeof(struct mlkem512_keypair),
 	     tee_cryp_obj_mlkem512_keypair_attrs),
 ```
-
-**Bug hit here:** the first version referenced a macro
-`MLKEM512_KEY_SIZE_BITS` here — but that macro was only ever `#define`d
-inside `mlkem512_keygen.c`, a *different translation unit*. C preprocessor
-defines are file-local unless placed in a shared header, so this failed to
-compile with `'MLKEM512_KEY_SIZE_BITS' undeclared here`. Fixed by using
-`KEY_SIZE_BYTES_MLKEM512_PUB * 8` directly — a macro already defined in
-*this* file from Part 4.1.
-
 ---
 
 ## Part 6 — Wiring the keygen dispatch
