@@ -525,35 +525,6 @@ static void op_attr_mlkem512_priv_free(void *attr)
 }
 ```
 
-**Bug hit here — repeatedly.** The first attempt used a slightly different
-(guessed) signature for `to_user`, `from_binary`, and `from_obj`, based on
-an outdated mental model of the struct. The real, compiler-enforced struct
-in this OP-TEE version is:
-
-```c
-struct attr_ops {
-	TEE_Result (*from_user)(void *attr, const void *buffer, size_t size);
-	TEE_Result (*to_user)(void *attr, struct ts_session *sess,
-			     void *buffer, uint64_t *size);
-	TEE_Result (*to_binary)(void *attr, void *data, size_t data_len,
-			   size_t *offs);
-	bool (*from_binary)(void *attr, const void *data, size_t data_len,
-			   size_t *offs);
-	TEE_Result (*from_obj)(void *attr, void *src_attr);
-	void (*free)(void *attr);
-	void (*clear)(void *attr);
-};
-```
-
-The three mismatches, all caught by real compiler errors
-(`-Wincompatible-pointer-types`), and fixed by copying the exact, correct
-signatures from the real, working `op_attr_25519_*` functions in the same
-file rather than guessing again:
-- `to_user` needed a `struct ts_session *sess` second parameter and
-  `uint64_t *size`, not `size_t *size`
-- `from_binary` returns `bool`, not `TEE_Result`
-- `from_obj`'s second parameter is `void *`, not `const void *`
-
 **4.3 — Registering both in the `attr_ops[]` table**:
 
 ```c
@@ -894,38 +865,8 @@ the shared secret matches on both sides. This would prove the *whole*
 keypair is functionally usable together, not just that each half
 individually matches known-good reference bytes.
 
----
 
-## Part 10 — What this integration does *not* prove (honest scope)
-
-Recorded here because a capstone/security write-up is stronger for naming
-its own limitations rather than needing someone else to find them first:
-
-- **No side-channel analysis.** The heap-migration rewrite in Part 7
-  changed code (`mlk_poly_rej_uniform_x4`, `mlk_poly_getnoise_eta1_4x`)
-  that the upstream project specifically wrote to be constant-time. Moving
-  to heap allocation is functionally correct (proven in Part 9) but has not
-  been checked for new timing or cache-behavior side channels the original
-  stack-based layout didn't have.
-- **RNG chain verified for structure, not for entropy quality on real
-  hardware.** In this QEMU development environment, the "hardware RNG"
-  backing `crypto_rng_read()` is QEMU's virtio-rng device, itself backed by
-  the host machine's `/dev/urandom` — a different code path than OP-TEE's
-  real secure-hardware RNG driver on physical silicon, which this
-  integration has not been tested against.
-- **No fuzzing or adversarial testing** of the new attribute-ops functions,
-  the object-properties table entry, or the syscall dispatch cases — only
-  the "happy path" (successful keygen, successful attribute read-out) has
-  been exercised.
-- **Heap zeroization on every error path has not been independently
-  audited** beyond code review — the `mlk_zeroize()`-before-`free()`
-  pattern is applied, but a dedicated audit of every exit branch (including
-  ones only reachable under memory pressure, e.g. `memalign()` failure)
-  has not been performed.
-
----
-
-## Part 11 — Complete file-change summary
+## Part 10 — Complete file-change summary
 
 | File | Change |
 |---|---|
@@ -952,7 +893,7 @@ its own limitations rather than needing someone else to find them first:
 
 ---
 
-## Part 12 — Reproducing this from scratch: the short version
+## Part 11 — Reproducing this from scratch: the short version
 
 1. Clone `mlkem-native`, copy `mlkem/` contents into `core/mlkem_native/`
    as described in Part 1.
