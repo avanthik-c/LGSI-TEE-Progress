@@ -172,6 +172,3 @@ This kind of file is typical in **cryptographic library engineering**, especiall
 
 The statistical rigor (warmup, many iterations, percentile reporting, CSV export) suggests this is part of a **benchmark suite comparing multiple ML-KEM implementations** — `LIB_NAME` being a configurable label, and the CSV schema including a `library` column, both point to results from several libraries eventually being merged and compared side by side.
 
-## A small inconsistency worth flagging
-
-`WARMUP_ITERS` is defined as `100` and printed in the summary header, but the actual warmup loop is time-based (`while (now_us() - warmup_start < 100000.0)`, i.e. 100 ms), not iteration-based. So the printed "warmup=100" doesn't necessarily reflect how many warmup calls actually happened — it could be more or fewer depending on how fast each call runs. This is cosmetic (doesn't affect the benchmark's correctness) but could be confusing when reading the output.
