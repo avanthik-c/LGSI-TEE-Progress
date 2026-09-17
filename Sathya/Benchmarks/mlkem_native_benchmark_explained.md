@@ -51,32 +51,6 @@ Every individual sample (not just the summary statistics) is written to two CSV 
 
 
 ---
-
-## System Specifications
-
-| Component | Specification |
-| :--- | :--- |
-| **System Model** | Apple MacBook Air (M4, 2025) |
-| **Processor (CPU)** | Apple M4 Chip (10-Core CPU) |
-| **Graphics (dGPU)** | Not Available (No Dedicated GPU) |
-| **Graphics (iGPU)** | Apple M4 Integrated 8-Core GPU |
-| **Memory (RAM)** | 16 GB Unified Memory |
-| **Swap Space** | Dynamic macOS Swap Memory |
-| **Display** | 13.6" 2560 x 1664 @ 60 Hz (Built-in Liquid Retina Display) |
-| **Audio** | Enabled |
-
----
-
-## Results
-
-| Distribution | Timing Comparison |
-| :---: | :---: |
-| <img src="./results/distribution_boxplots.png" width="450"> | <img src="./results/timing_comparison.png" width="450"> |
-
-<img src="./results/stack_comparison.png" width="450">
-
----
-
 ## Appendix: Fully annotated source
 
 The complete source file, with a comment on essentially every line explaining what it does, is included below for line-by-line reference.
@@ -331,3 +305,32 @@ int main(void) {
     return 0;                                                         // Successful completion
 }
 ```
+---
+
+## System Specifications
+
+| Component | Specification |
+| :--- | :--- |
+| **System Model** | Apple MacBook Air (M4, 2025) |
+| **Processor (CPU)** | Apple M4 Chip (10-Core CPU) |
+| **Graphics (dGPU)** | Not Available (No Dedicated GPU) |
+| **Graphics (iGPU)** | Apple M4 Integrated 8-Core GPU |
+| **Memory (RAM)** | 16 GB Unified Memory |
+| **Swap Space** | Dynamic macOS Swap Memory |
+| **Display** | 13.6" 2560 x 1664 @ 60 Hz (Built-in Liquid Retina Display) |
+| **Audio** | Enabled |
+
+---
+
+## Results
+
+| Distribution | Timing Comparison |
+| :---: | :---: |
+| <img src="./results/distribution_boxplots.png" width="450"> | <img src="./results/timing_comparison.png" width="450"> |
+
+| Space Comparison |
+| :---: |
+|<img src="./results/stack_comparison.png" width="450">|
+
+---
+
