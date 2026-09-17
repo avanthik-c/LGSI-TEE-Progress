@@ -112,6 +112,8 @@ OP-TEE memory corruption
 TA isolation failures
 Normal World → Secure World attacks
 
+![clockspeed data](image.png)
+![memory consumption](image-1.png)
 
 Authors: Andrade et al.
 
