@@ -19,9 +19,9 @@ mlkem-benchmark/
 ├── plot_results.py         # generates the 3 charts from results/combined.csv
 └── results/
     ├── combined.csv                 # raw per-iteration timing samples, both libraries
-    ├── combined_stack.csv           # raw per-iteration timing samples, both libraries
+    ├── combined_stack.csv           # raw per-iteration spacing samples, both libraries
     ├── timing_comparison.png        # headline grouped bar chart (median + p99 whiskers)
-    ├── codesize_comparison.png      # .text size comparison
+    ├── codesize_comparison.png      # text size comparison
     ├── distribution_boxplots.png    # per-operation timing distributions
     └── stack_comparison.png         # Depth of stack
     
