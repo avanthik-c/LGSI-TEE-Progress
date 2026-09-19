@@ -182,8 +182,10 @@ TEE_Result crypto_acipher_gen_mlkem512_key(struct mlkem512_keypair *key,
 
 ### File: `core/mlkem_native/mlkem512_keygen.c`
 
-This is the function that actually calls into the vendored library. Final
-working version, reflecting the heap-migration fix described in Part 7:
+This is the function that actually calls into the vendored library.
+Final working version. The `calloc` calls below allocate the **persistent**
+keypair object that outlives key generation (see Part 7.5). They are unrelated
+to the transient-buffer problem in Part 7:
 
 ```c
 // SPDX-License-Identifier: BSD-2-Clause
@@ -639,96 +641,101 @@ before moving on, without exception.
 
 ## Part 7 — The stack overflow saga (full postmortem)
 
-This was the hardest bug in the whole integration, and the eventual fix
-involved a real architectural change, not a config tweak — worth recording
-in full since the same class of bug will recur for any sufficiently
-buffer-heavy crypto routine wired into OP-TEE core.
+> **Correction notice.** An earlier revision of this document concluded that the
+> kernel stack could not be enlarged and fixed the crash by moving buffers to
+> the heap inside the vendored library. That conclusion was wrong. The heap
+> migration has been reverted and replaced by a one-line configuration fix.
+> The earlier version remains available through `git log -p README.md`.
 
 ### 7.1 — First symptom
 
-TA call to `TEE_GenerateKey()` panicked with `Core data-abort ...
+A TA call to `TEE_GenerateKey()` panicked with `Core data-abort ...
 (translation fault)`, deep inside `mlk_poly_rej_uniform_x4` (called from
 `mlk_gen_matrix` → `mlk_indcpa_keypair_derand` → `mlkem_keypair_derand` →
-our `crypto_acipher_gen_mlkem512_key`).
+our `crypto_acipher_gen_mlkem512_key`). Disassembly showed `sub sp, sp, #0xb60`
+(2912 bytes) in that function's prologue, followed immediately by a fault on
+the next store: the signature of a genuine stack overflow.
 
-### 7.2 — Wrong hypothesis #1: per-thread stack
+ML-KEM-512's batched Keccak operations need roughly 10KB of transient memory
+(noise polynomial buffers and 4-way Keccak state), while the default OP-TEE
+per-thread kernel stack is **8KB**.
 
-`CFG_CORE_THREAD_STACK_SIZE` was bumped (128, 256KB tried). **This had zero
-effect** — because the syscall-dispatch call chain
-(`el0_svc → thread_scall_handler → scall_do_call → syscall_obj_generate_key
-→ ...`) does not run on the large per-thread stack at all. This was
-confirmed by reading the actual entry assembly
-(`core/arch/arm/kernel/thread_a64.S`), which shows the SVC/syscall path
-switches `sp` to a *different*, much smaller stack region before dispatch.
+### 7.2 — Wrong attempt #1: `CFG_CORE_THREAD_STACK_SIZE` (a variable that does not exist)
 
-### 7.3 — Correct hypothesis: the tmp stack
+`CFG_CORE_THREAD_STACK_SIZE` was bumped to 128KB and 256KB with zero effect.
+The earlier revision blamed the wrong stack. The real reason is simpler:
+**this variable does not exist anywhere in the OP-TEE source tree.** OP-TEE's
+Makefile build silently ignores unrecognized `CFG_*` variables, so the stack
+stayed at 8KB.
 
-The real stack in use is `STACK_TMP_SIZE`
-(`core/arch/arm/include/kernel/thread_private_arch.h`), default
-`2048 + STACK_TMP_OFFS` bytes on AArch64 — overridable via
-`CFG_STACK_TMP_EXTRA` (confirmed as a real, existing knob — an SE050 crypto
-driver in-tree enforces a *minimum* of 8192 for exactly this reason, strong
-precedent that "crypto library needs more tmp-stack headroom" is a known,
-expected class of problem).
+### 7.3 — Wrong attempt #2: `CFG_STACK_TMP_EXTRA` (a real variable for the wrong stack)
 
-`CFG_STACK_TMP_EXTRA` was tried at 8192, then 16384, then 65536 — each
-confirmed to actually be applied (`grep`-checked in the generated
-`conf.mk`/`conf.h` after a **forced clean rebuild**, since Buildroot's
-caching had silently no-op'd a config change at least once earlier in this
-project) — and **the crash persisted identically at every value**,
-confirmed via `addr2line`/`objdump` disassembly to be the exact same
-instruction every time: `stp x0, x1, [sp, #8]`, immediately following
-`sub sp, sp, #0xb60` (2912 bytes) in `mlk_poly_rej_uniform_x4`'s own
-prologue.
+`CFG_STACK_TMP_EXTRA` is a real knob, and it was tried at 8192, 16384 and 65536
+(applied values confirmed via `grep` of the generated `conf.mk`/`conf.h` after a
+forced clean rebuild). The crash persisted identically. Reading
+`core/arch/arm/kernel/thread_a64.S` shows why: syscall dispatch runs on the
+main **per-thread** stack (`THREAD_CTX_KERN_SP`), not the tmp stack, so
+enlarging the tmp stack could not help.
 
-**Combining a large `CFG_CORE_THREAD_STACK_SIZE` with a large
-`CFG_STACK_TMP_EXTRA` at the same time caused the board to hang during
-boot** (before reaching the login prompt) — very likely exhausting QEMU's
-fixed TZDRAM secure-memory allocation once multiplied across `-smp 2`
-(two CPUs) and multiple thread contexts. The thread-stack change was
-reverted (it was never the actual problem) once this was understood.
+The boot hang seen earlier when combining a large thread-stack value with a
+large `CFG_STACK_TMP_EXTRA` cannot have come from the combination, since the
+first variable was a no-op. It came from the oversized tmp stack alone
+(multiplied across `-smp 2` within QEMU's fixed TZDRAM).
 
-### 7.4 — The real fix: move the buffers off the stack entirely
+### 7.4 — Interim workaround (reverted): moving buffers to the heap
 
-Rather than keep guessing at a "big enough" tmp-stack size, the actual fix
-was to **stop allocating multi-kilobyte buffers on the stack in the first
-place**, inside the vendored mlkem-native source itself:
+Believing the thread stack was fixed at 8KB, the vendored source was modified:
+`sampling.c` (`mlk_poly_rej_uniform_x4`) and `poly_k.c`
+(`mlk_poly_getnoise_eta1_4x`) were changed to use `memalign(16, ...)` heap
+buffers with `mlk_zeroize()` + `free()` on every exit path. It stopped the
+crash but was the wrong fix:
 
-**`core/mlkem_native/src/sampling.c`** — `mlk_poly_rej_uniform_x4()` was
-refactored so its large local buffer (`buf[4][...]`, ~2.7KB) and its 4-way
-parallel Keccak context (`statex`) are allocated via
-`memalign(16, ...)` instead of as stack locals, with matching `free()` (and
-`mlk_zeroize()` before free, to preserve the same "don't leave key material
-lying around" property stack-based cleanup gave for free) on every exit
-path including error paths.
+- it made invasive changes to a vendored upstream library, complicating future
+  upstream updates and review;
+- it moved transient secret-dependent scratch data onto the shared secure heap,
+  adding lifecycle risk that stack allocation avoids for free.
 
-**`core/mlkem_native/src/poly_k.c`** — `mlk_poly_getnoise_eta1_4x()`
-received the identical treatment for its own large local buffers
-(`buf[4][...]`, `extkey[4][...]`).
+All of these changes have been reverted; `src/` is back to upstream.
 
-**`core/mlkem_native/src/polyvec.h`** — `__attribute__((aligned(16)))`
-added directly to the `polyvec` struct definition, to guarantee correct
-16-byte alignment for NEON vector loads/stores now that some data moved
-off the (already-aligned-by-the-compiler) stack onto the heap.
+### 7.5 — The real fix: `CFG_STACK_THREAD_EXTRA`
 
-**`core/mlkem_native/mlkem_native_config.h`** — with the root cause fixed,
-`MLK_CONFIG_USE_NATIVE_BACKEND_FIPS202` (which had been temporarily
-disabled during an earlier, incorrect bisection step, falling back to
-portable C for Keccak) was re-enabled, restoring full AArch64 NEON
-acceleration for both the arithmetic and hashing backends.
+OP-TEE's supported knob for the main kernel thread stack is
+`CFG_STACK_THREAD_EXTRA`. The final size is:
 
-After this change, keygen completed successfully with **no stack-size
-override needed at all** beyond OP-TEE's own defaults.
+```
+STACK_THREAD_SIZE = 8192 + CFG_STACK_THREAD_EXTRA
+```
 
-### 7.5 — Lesson for anyone hitting this class of bug
+OP-TEE's own NXP SE050 crypto driver raises this same variable for its stack
+headroom, which is strong precedent that this is the intended mechanism for
+heavy crypto in core. In the build repo's `qemu_v8.mk`:
 
-A `sub sp, sp, #<large>` in a disassembled function prologue, followed
-immediately by a translation-fault on the very next store instruction, is
-close to a definitive signature of a genuine stack overflow at that exact
-call site — worth checking the actual disassembly (`objdump -d`,
-cross-referenced with `addr2line`/`symbolize.py`) before assuming a config
-knob alone will fix it, since the correct fix may be architectural
-(reduce the frame size) rather than numerical (grow the stack further).
+```makefile
+OPTEE_OS_COMMON_FLAGS += CFG_STACK_THREAD_EXTRA=24576
+```
+
+That gives 8KB + 24KB = **32KB per thread**. The original stack allocations in
+`sampling.c` and `poly_k.c` were restored, so transient buffers again live on
+the stack and disappear automatically when the function returns.
+
+The `calloc` allocations in `mlkem512_keygen.c` for `struct mlkem512_keypair`
+(`pub`, `priv`) stay on the heap. That is correct and follows the RSA/ECC
+pattern, because that object is **persistent**: it must outlive the generation
+function and be returned to the TA.
+
+**Rule of thumb:** transient scratchpads (Keccak state, noise buffers) belong
+on the stack; long-lived key objects belong on the secure heap.
+
+### 7.6 — Lessons for anyone hitting this class of bug
+
+1. **Grep-verify every `CFG_*` variable against the OP-TEE source before
+   trusting it.** A misspelled or nonexistent variable is silently ignored and
+   produces no build error.
+2. **Confirm which stack the failing code actually runs on** (read
+   `thread_a64.S`) before choosing which knob to turn.
+3. A `sub sp, sp, #<large>` prologue followed by a translation fault on the next
+   store is close to a definitive stack-overflow signature. Fix it in the build
+   configuration first; modify vendored code only as a last resort.
 
 ---
 
@@ -757,11 +764,10 @@ and:
   compare against an equivalently-measured classical (RSA) baseline
 
 **`ta/user_ta_header_defines.h`** — `TA_STACK_SIZE (4 * 1024)`. Note this is
-the **TA userspace** stack (separate from every stack discussed in Part 7,
-which are all *kernel/core* stacks) — 4KB was sufficient here because,
-after the Part 7 fix, none of the actual heavy computation happens with
-large stack frames anymore; the TA side is just thin plumbing around the
-syscall.
+the **TA userspace** stack, separate from the kernel/core stacks discussed in
+Part 7. 4KB is sufficient because the TA is only thin plumbing around the
+syscall; the heavy Keccak/NTT work runs in OP-TEE core, on the kernel thread
+stack sized by `CFG_STACK_THREAD_EXTRA`.
 
 **Build registration**: `mlkem_test/CMakeLists.txt` added, and
 `optee_examples/CMakeLists.txt` (top-level) picks it up automatically via
@@ -844,10 +850,8 @@ individually matches known-good reference bytes.
 | `core/mlkem_native/mlkem_native.c` (new) | Vendored SCU bundle, unmodified from upstream |
 | `core/mlkem_native/mlkem_native_asm.S` (new) | Vendored SCU assembly bundle, unmodified from upstream |
 | `core/mlkem_native/mlkem_native.h` (new) | Vendored public header, unmodified from upstream |
-| `core/mlkem_native/src/` (new dir) | Vendored source tree, unmodified from upstream, except: |
-| `core/mlkem_native/src/sampling.c` | `mlk_poly_rej_uniform_x4()` refactored: stack buffers → `memalign(16,...)` heap buffers |
-| `core/mlkem_native/src/poly_k.c` | `mlk_poly_getnoise_eta1_4x()` refactored: same stack→heap treatment |
-| `core/mlkem_native/src/polyvec.h` | Added `__attribute__((aligned(16)))` to the `polyvec` struct |
+| `core/mlkem_native/src/` (new dir) | Vendored source tree, unmodified from upstream |
+| `build/qemu_v8.mk` | `OPTEE_OS_COMMON_FLAGS += CFG_STACK_THREAD_EXTRA=24576` (32KB per-thread kernel stack) |
 | `core/mlkem_native/mlkem_native_config.h` (new) | Parameter set 512, native backends on, backend file macros, no randomized API, custom namespace prefix |
 | `core/mlkem_native/mlkem512_keygen.c` (new) | `crypto_acipher_alloc_mlkem512_keypair()`, `crypto_acipher_gen_mlkem512_key()` — VFP enable/disable, RNG fill, calls into `mlkem_keypair_derand()` |
 | `core/mlkem_native/sub.mk` (new) | Build file list + per-file warning relaxation |
@@ -857,10 +861,11 @@ individually matches known-good reference bytes.
 | `core/tee/tee_svc_cryp.c` | Ops-index + key-size constants; 14 attribute-ops functions; `attr_ops[]` table entries; `tee_cryp_obj_mlkem512_keypair_attrs[]`; `PROP(TEE_TYPE_MLKEM512_KEYPAIR, ...)` entry; `tee_svc_obj_generate_key_mlkem512()`; dispatch case in `syscall_obj_generate_key()`; dispatch case in `tee_obj_set_type()` |
 | `optee_examples/mlkem_test/` (new) | Full example TA/CA — see Part 8 |
 
-**Reverted / not present in the final state:**
-- `CFG_CORE_THREAD_STACK_SIZE` override in `core/arch/arm/plat-vexpress/conf.mk` — tried, found to be the wrong stack entirely, removed
-- `CFG_STACK_TMP_EXTRA` override in the same file — tried at multiple values while the real bug was still present, ultimately unnecessary once Part 7's heap migration fixed the actual root cause, removed
-- The hardcoded KAT seed in `mlkem512_keygen.c` — used only transiently for Part 9.2's verification, reverted immediately after
+**Tried and reverted (not present in the final state):**
+- `CFG_CORE_THREAD_STACK_SIZE`: a variable that does not exist in OP-TEE; silently ignored by the build
+- `CFG_STACK_TMP_EXTRA`: a real variable, but for a stack the syscall path does not use
+- Heap migration of buffers in `src/sampling.c` and `src/poly_k.c` (and the `polyvec` alignment attribute added for it): replaced by `CFG_STACK_THREAD_EXTRA`
+- The hardcoded KAT seed in `mlkem512_keygen.c`: used only transiently for Part 9.2's verification, reverted immediately after
 
 ---
 
@@ -886,8 +891,10 @@ individually matches known-good reference bytes.
 8. Wire the two dispatch points from Part 6, verifying each with
    `git diff` before rebuilding, given how repetitive-looking these
    switch statements are.
-9. Build. If you hit a stack-related crash deep in `mlk_poly_rej_uniform_x4`
-   or a similar function, go straight to Part 7's real fix (heap migration)
-   rather than iterating on stack-size config values.
+9. Build with `CFG_STACK_THREAD_EXTRA=24576` in your platform makefile
+   (Part 7.5). If you hit a stack-related crash deep in
+   `mlk_poly_rej_uniform_x4` or a similar function, first confirm with `grep`
+   that the variable actually exists in your OP-TEE tree and appears in the
+   generated `conf.mk`. Do **not** modify the vendored source.
 10. Build the test TA/CA from Part 8.
 11. Verify using Part 9's KAT procedure before trusting the result.
