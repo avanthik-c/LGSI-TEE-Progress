@@ -1,0 +1,336 @@
+/*
+ * Copyright (c) The mlkem-native project authors
+ * SPDX-License-Identifier: Apache-2.0 OR ISC OR MIT
+ */
+
+/* References
+ * ==========
+ *
+ * - [FIPS203]
+ *   FIPS 203 Module-Lattice-Based Key-Encapsulation Mechanism Standard
+ *   National Institute of Standards and Technology
+ *   https://csrc.nist.gov/pubs/fips/203/final
+ *
+ * - [REF]
+ *   CRYSTALS-Kyber C reference implementation
+ *   Bos, Ducas, Kiltz, Lepoint, Lyubashevsky, Schanck, Schwabe, Seiler, Stehlé
+ *   https://github.com/pq-crystals/kyber/tree/main/ref
+ */
+
+#include "common.h"
+#if !defined(MLK_CONFIG_MULTILEVEL_NO_SHARED)
+
+#include "debug.h"
+#include "sampling.h"
+#include "symmetric.h"
+#include "verify.h"
+#include <stdlib.h>
+
+/* Reference: `rej_uniform()` in the reference implementation @[REF].
+ *            - Our signature differs from the reference implementation
+ *              in that it adds the offset and always expects the base of the
+ *              target buffer. This avoids shifting the buffer base in the
+ *              caller, which appears tricky to reason about. */
+MLK_STATIC_TESTABLE unsigned mlk_rej_uniform_c(int16_t *r, unsigned target,
+                                               unsigned offset,
+                                               const uint8_t *buf,
+                                               unsigned buflen)
+__contract__(
+  requires(offset <= target && target <= 4096 && buflen <= 4096 && buflen % 3 == 0)
+  requires(memory_no_alias(r, sizeof(int16_t) * target))
+  requires(memory_no_alias(buf, buflen))
+  requires(array_bound(r, 0, offset, 0, MLKEM_Q))
+  assigns(memory_slice(r, sizeof(int16_t) * target))
+  ensures(offset <= return_value && return_value <= target)
+  ensures(array_bound(r, 0, return_value, 0, MLKEM_Q)))
+{
+  unsigned ctr, pos;
+  int16_t val0, val1;
+
+  mlk_assert_bound(r, offset, 0, MLKEM_Q);
+
+  ctr = offset;
+  pos = 0;
+  /* pos + 3 cannot overflow due to the assumption buflen <= 4096 */
+  while (ctr < target && pos + 3 <= buflen)
+  __loop__(
+    invariant(offset <= ctr && ctr <= target && pos <= buflen)
+    invariant(array_bound(r, 0, ctr, 0, MLKEM_Q))
+    decreases(buflen - pos))
+  {
+    /* Safety:
+     * - The explicit cast to uint16_t ensures that << 8 does
+     *   not signed-overflow even on a 16-bit system.
+     * - The conversion to int16_t is safe due to the explicit 0xFFF
+     *   truncation.
+     */
+    val0 = (int16_t)(((buf[pos + 0] >> 0) | ((uint16_t)buf[pos + 1] << 8)) &
+                     0xFFF);
+    val1 = (int16_t)(((buf[pos + 1] >> 4) | (buf[pos + 2] << 4)) & 0xFFF);
+    pos += 3;
+
+    if (val0 < MLKEM_Q)
+    {
+      r[ctr++] = val0;
+    }
+    if (ctr < target && val1 < MLKEM_Q)
+    {
+      r[ctr++] = val1;
+    }
+  }
+
+  mlk_assert_bound(r, ctr, 0, MLKEM_Q);
+  return ctr;
+}
+
+/**
+ * Run rejection sampling on uniform random bytes to generate uniform random
+ * integers mod MLKEM_Q.
+ *
+ * @reference{`rej_uniform()` in the reference implementation @[REF]. Our
+ * signature differs from the reference in that it adds the offset and always
+ * expects the base of the target buffer; this avoids shifting the buffer
+ * base in the caller, which is tricky to reason about. Has an optional
+ * fallback to a native implementation.}
+ *
+ * @param[out] r      Output buffer.
+ * @param      target Requested number of 16-bit integers (uniform mod MLKEM_Q).
+ *                    Must be <= 4096.
+ * @param      offset Number of 16-bit integers that have already been
+ *                    sampled. Must be <= @p target.
+ * @param[in]  buf    Input buffer (assumed to be uniform random bytes).
+ * @param      buflen Length of input buffer in bytes. Must be <= 4096 and a
+ *                    multiple of 3.
+ *
+ * @note Strictly speaking, only a few values of @p buflen near UINT_MAX need
+ *       excluding. The limit of 4096 is somewhat arbitrary but sufficient
+ *       for all uses of this function. Similarly, the actual limit for
+ *       @p target is UINT_MAX/2.
+ *
+ * @return New offset of sampled 16-bit integers, at most @p target and at
+ *         least the initial @p offset. If the new offset is strictly less
+ *         than @p target, the entire input buffer is guaranteed to have been
+ *         consumed; otherwise no information is provided on how many bytes
+ *         of the input buffer have been consumed.
+ */
+static unsigned mlk_rej_uniform(int16_t *r, unsigned target, unsigned offset,
+                                const uint8_t *buf, unsigned buflen)
+__contract__(
+  requires(offset <= target && target <= 4096 && buflen <= 4096 && buflen % 3 == 0)
+  requires(memory_no_alias(r, sizeof(int16_t) * target))
+  requires(memory_no_alias(buf, buflen))
+  requires(array_bound(r, 0, offset, 0, MLKEM_Q))
+  assigns(memory_slice(r, sizeof(int16_t) * target))
+  ensures(offset <= return_value && return_value <= target)
+  ensures(array_bound(r, 0, return_value, 0, MLKEM_Q))
+)
+{
+#if defined(MLK_USE_NATIVE_REJ_UNIFORM)
+  if (offset == 0)
+  {
+    int ret;
+    ret = mlk_rej_uniform_native(r, target, buf, buflen);
+    if (ret != MLK_NATIVE_FUNC_FALLBACK)
+    {
+      unsigned res = (unsigned)ret;
+      mlk_assert_bound(r, res, 0, MLKEM_Q);
+      return res;
+    }
+  }
+#endif /* MLK_USE_NATIVE_REJ_UNIFORM */
+
+  return mlk_rej_uniform_c(r, target, offset, buf, buflen);
+}
+
+#ifndef MLKEM_GEN_MATRIX_NBLOCKS
+#define MLKEM_GEN_MATRIX_NBLOCKS                                       \
+  ((12 * MLKEM_N / 8 * ((uint32_t)1 << 12) / MLKEM_Q + MLK_XOF_RATE) / \
+   MLK_XOF_RATE)
+#endif
+
+#if !defined(MLK_CONFIG_SERIAL_FIPS202_ONLY)
+/* Reference: Does not exist in the reference implementation @[REF].
+ *            - x4-batched version of `rej_uniform()` from the
+ *              reference implementation, leveraging x4-batched Keccak-f1600. */
+MLK_INTERNAL_API
+void mlk_poly_rej_uniform_x4(mlk_poly *vec0, mlk_poly *vec1, mlk_poly *vec2,
+                             mlk_poly *vec3,
+                             uint8_t seed[4][MLK_ALIGN_UP(MLKEM_SYMBYTES + 2)])
+{
+    #define BUF_ROW_SIZE MLK_ALIGN_UP(MLKEM_GEN_MATRIX_NBLOCKS * MLK_XOF_RATE)
+
+    /* C90 Strict: All declarations must be at the very top of the block */
+    /*
+    uint8_t *buf_flat;
+    mlk_xof_x4_ctx *statex;
+    uint8_t *buf[4];
+    */
+    unsigned ctr[4];
+    unsigned buflen;
+    MLK_ALIGN uint8_t buf[4][BUF_ROW_SIZE];
+    MLK_ALIGN mlk_xof_x4_ctx statex_stack;
+    mlk_xof_x4_ctx *statex = &statex_stack;
+
+    /* Allocate massive buffers on the 16-byte aligned heap, bypassing the stack */
+    /*
+    buf_flat = memalign(16, 4 * BUF_ROW_SIZE);
+    statex = memalign(16, sizeof(mlk_xof_x4_ctx));
+
+    if (!buf_flat || !statex) {
+        free(buf_flat);
+        free(statex);
+        return;
+    }
+
+    buf[0] = buf_flat;
+    buf[1] = buf_flat + BUF_ROW_SIZE;
+    buf[2] = buf_flat + 2 * BUF_ROW_SIZE;
+    buf[3] = buf_flat + 3 * BUF_ROW_SIZE;
+    */
+
+    mlk_xof_x4_init(statex);
+    mlk_xof_x4_absorb(statex, seed, MLKEM_SYMBYTES + 2);
+
+    mlk_xof_x4_squeezeblocks(buf, MLKEM_GEN_MATRIX_NBLOCKS, statex);
+    buflen = MLKEM_GEN_MATRIX_NBLOCKS * MLK_XOF_RATE;
+
+    ctr[0] = mlk_rej_uniform(vec0->coeffs, MLKEM_N, 0, buf[0], buflen);
+    ctr[1] = mlk_rej_uniform(vec1->coeffs, MLKEM_N, 0, buf[1], buflen);
+    ctr[2] = mlk_rej_uniform(vec2->coeffs, MLKEM_N, 0, buf[2], buflen);
+    ctr[3] = mlk_rej_uniform(vec3->coeffs, MLKEM_N, 0, buf[3], buflen);
+
+    buflen = MLK_XOF_RATE;
+    while (ctr[0] < MLKEM_N || ctr[1] < MLKEM_N || ctr[2] < MLKEM_N || ctr[3] < MLKEM_N)
+    {
+        mlk_xof_x4_squeezeblocks(buf, 1, statex);
+        ctr[0] = mlk_rej_uniform(vec0->coeffs, MLKEM_N, ctr[0], buf[0], buflen);
+        ctr[1] = mlk_rej_uniform(vec1->coeffs, MLKEM_N, ctr[1], buf[1], buflen);
+        ctr[2] = mlk_rej_uniform(vec2->coeffs, MLKEM_N, ctr[2], buf[2], buflen);
+        ctr[3] = mlk_rej_uniform(vec3->coeffs, MLKEM_N, ctr[3], buf[3], buflen);
+    }
+
+    mlk_xof_x4_release(statex);
+    
+    /* Zeroize and clean up heap memory */
+    /*
+    mlk_zeroize(buf_flat, 4 * BUF_ROW_SIZE);
+    free(buf_flat);
+    free(statex);
+    */
+}
+#endif /* !MLK_CONFIG_SERIAL_FIPS202_ONLY */
+
+/**
+ * Load 4 bytes into a 32-bit integer in little-endian order.
+ *
+ * @reference{`load32_littleendian()` in the reference implementation @[REF].}
+ *
+ * @param[in] x Input byte array.
+ *
+ * @return 32-bit unsigned integer loaded from @p x.
+ */
+static uint32_t mlk_load32_littleendian(const uint8_t x[4])
+{
+  uint32_t r;
+  r = (uint32_t)x[0];
+  r |= (uint32_t)x[1] << 8;
+  r |= (uint32_t)x[2] << 16;
+  r |= (uint32_t)x[3] << 24;
+  return r;
+}
+
+/* Reference: `cbd2()` in the reference implementation @[REF]. */
+MLK_INTERNAL_API
+void mlk_poly_cbd2(mlk_poly *r, const uint8_t buf[2 * MLKEM_N / 4])
+{
+  unsigned i;
+  for (i = 0; i < MLKEM_N / 8; i++)
+  __loop__(
+    invariant(i <= MLKEM_N / 8)
+    invariant(array_abs_bound(r->coeffs, 0, 8 * i, 3))
+    decreases(MLKEM_N / 8 - i))
+  {
+    unsigned j;
+    uint32_t t = mlk_load32_littleendian(buf + 4 * i);
+    uint32_t d = t & 0x55555555;
+    d += (t >> 1) & 0x55555555;
+
+    for (j = 0; j < 8; j++)
+    __loop__(
+      invariant(i <= MLKEM_N / 8 && j <= 8)
+      invariant(array_abs_bound(r->coeffs, 0, 8 * i + j, 3))
+      decreases(8 - j))
+    {
+      /* Safety: The & 0x3 masks each value to 2 bits (range [0, 3]), so the
+       * truncation and subsequent subtraction in int16_t is lossless. */
+      const int16_t a = (int16_t)((d >> (4 * j + 0)) & 0x3);
+      const int16_t b = (int16_t)((d >> (4 * j + 2)) & 0x3);
+      r->coeffs[8 * i + j] = (int16_t)(a - b);
+    }
+  }
+}
+
+#if defined(MLK_CONFIG_MULTILEVEL_WITH_SHARED) || MLKEM_ETA1 == 3
+/**
+ * Load 3 bytes into a 32-bit integer in little-endian order.
+ *
+ * This function is only needed for ML-KEM-512.
+ *
+ * @reference{`load24_littleendian()` in the reference implementation @[REF].}
+ *
+ * @param[in] x Input byte array.
+ *
+ * @return 32-bit unsigned integer loaded from @p x (most significant byte
+ *         is zero).
+ */
+static uint32_t mlk_load24_littleendian(const uint8_t x[3])
+{
+  uint32_t r;
+  r = (uint32_t)x[0];
+  r |= (uint32_t)x[1] << 8;
+  r |= (uint32_t)x[2] << 16;
+  return r;
+}
+
+/* Reference: `cbd3()` in the reference implementation @[REF]. */
+MLK_INTERNAL_API
+void mlk_poly_cbd3(mlk_poly *r, const uint8_t buf[3 * MLKEM_N / 4])
+{
+  unsigned i;
+  for (i = 0; i < MLKEM_N / 4; i++)
+  __loop__(
+    invariant(i <= MLKEM_N / 4)
+    invariant(array_abs_bound(r->coeffs, 0, 4 * i, 4))
+    decreases(MLKEM_N / 4 - i))
+  {
+    unsigned j;
+    const uint32_t t = mlk_load24_littleendian(buf + 3 * i);
+    uint32_t d = t & 0x00249249;
+    d += (t >> 1) & 0x00249249;
+    d += (t >> 2) & 0x00249249;
+
+    for (j = 0; j < 4; j++)
+    __loop__(
+      invariant(i <= MLKEM_N / 4 && j <= 4)
+      invariant(array_abs_bound(r->coeffs, 0, 4 * i + j, 4))
+      decreases(4 - j))
+    {
+      /* Safety: The & 0x7 masks each value to 3 bits (range [0, 7]), so the
+       * truncation and subsequent subtraction in int16_t is lossless. */
+      const int16_t a = (int16_t)((d >> (6 * j + 0)) & 0x7);
+      const int16_t b = (int16_t)((d >> (6 * j + 3)) & 0x7);
+      r->coeffs[4 * i + j] = (int16_t)(a - b);
+    }
+  }
+}
+#endif /* MLK_CONFIG_MULTILEVEL_WITH_SHARED || MLKEM_ETA1 == 3 */
+
+#else /* !MLK_CONFIG_MULTILEVEL_NO_SHARED */
+
+MLK_EMPTY_CU(sampling)
+
+#endif /* MLK_CONFIG_MULTILEVEL_NO_SHARED */
+
+/* To facilitate single-compilation-unit (SCU) builds, undefine all macros.
+ * Don't modify by hand -- this is auto-generated by scripts/autogen. */
+#undef MLKEM_GEN_MATRIX_NBLOCKS
