@@ -35,6 +35,16 @@ colors = {
     "PQClean": "#E76F51"                
 }
 
+# Shared styling so every bar chart looks the same:
+# legend always in the same place (below the plot, never covering bars) and
+# value labels drawn inside the top of each bar (never colliding with the p99 whisker).
+def place_legend(ax):
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.04), ncol=3, frameon=False, fontsize=9)
+
+def label_bar(ax, x_pos, value, text):
+    ax.annotate(text, xy=(x_pos, value), xytext=(0, -4), textcoords="offset points",
+                ha="center", va="top", fontsize=9, color="white", fontweight="bold")
+
 # --- Chart 1: grouped bar chart of median timing (Keygen Only) ---
 fig, ax = plt.subplots(figsize=(6, 5))
 x = np.arange(len(ops))
@@ -55,14 +65,12 @@ for i, lib in enumerate(raw_libs):
     err = p99 - med
     ax.errorbar(x + offset, med, yerr=[[0], [err]],
                 fmt='none', ecolor='black', capsize=4, linewidth=1)
-    pos_x=(x+offset)[0]
-    ax.text(pos_x, med + 0.5, f"{med:.1f}", ha='center', va='bottom', fontsize=9)
+    label_bar(ax, (x + offset)[0], med, f"{med:.1f}")
 
-ax.set_xticks(x)
-ax.set_xticklabels(["Keygen"])
-ax.set_ylabel("Time (microseconds, median, N=5000)")
+ax.set_xticks([])  # one group only; the title already says Keygen
+ax.set_ylabel("Time (microseconds, median, N=50000)")
 ax.set_title(f"ML-KEM-512 Keygen: C vs Assembly vs PQClean\n({ARCH} host build)")
-ax.legend()
+place_legend(ax)
 ax.grid(axis='y', linestyle='--', alpha=0.5)
 plt.tight_layout()
 plt.savefig("results/timing_comparison.png", dpi=150)
@@ -113,7 +121,7 @@ if data:
         
 ax.set_ylabel("microseconds")
 ax.grid(axis='y', linestyle='--', alpha=0.5)
-plt.title(f"Keygen Timing Distribution (N=5000, outliers hidden)\n({ARCH} host build)")
+plt.title(f"Keygen Timing Distribution (N=50000, outliers hidden)\n({ARCH} host build)")
 plt.tight_layout()
 plt.savefig("results/distribution_boxplots.png", dpi=150)
 plt.close()
@@ -134,14 +142,12 @@ for i, lib in enumerate(raw_libs):
     err = p99 - med
     ax.errorbar(x + offset, med, yerr=[[0], [err]],
                 fmt='none', ecolor='black', capsize=4, linewidth=1)
-    pos_x = (x + offset)[0]
-    ax.text(pos_x, med + 0.5, f"{med:.0f} B", ha='center', va='bottom', fontsize=9)
+    label_bar(ax, (x + offset)[0], med, f"{med:.0f} B")
 
-ax.set_xticks(x)
-ax.set_xticklabels(["Keygen"])
-ax.set_ylabel("Stack usage (bytes, median, N=5000)")
+ax.set_xticks([])  # one group only; the title already says Keygen
+ax.set_ylabel("Stack usage (bytes, median, N=50000)")
 ax.set_title(f"ML-KEM-512 Keygen: C vs Assembly vs PQClean\nPeak Stack Depth ({ARCH} host build)")
-ax.legend()
+place_legend(ax)
 ax.grid(axis='y', linestyle='--', alpha=0.5)
 plt.tight_layout()
 plt.savefig("results/stack_comparison.png", dpi=150)
