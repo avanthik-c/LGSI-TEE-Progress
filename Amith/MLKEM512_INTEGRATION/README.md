@@ -1235,39 +1235,7 @@ from 512, just a place worth double-checking by eye after editing.
 
 ---
 
-## 7. Stack space — the one place 768 genuinely needs *more*, not just "the same again"
-
-**Technically:** every OP-TEE core operation runs on a fixed-size stack,
-sized by a single build setting (`CFG_STACK_THREAD_EXTRA`) that applies
-to the *entire* system, not per key type. 512's key generation needs
-roughly 10KB of scratch space at its peak; 768's needs more, roughly
-14–15KB, because generating a 768 key involves bigger matrices and more
-intermediate math. Both key types have to fit inside whatever single
-stack size the whole system is configured with.
-
-**In plain terms:** imagine one shared workbench used for both a small
-project and a bigger one — the workbench has to be sized for the *bigger*
-project, or the bigger project's parts fall off the edge. 512 alone could
-get away with a smaller workbench; supporting 768 at the same time means
-sizing the workbench for 768's needs.
-
-The real, measured minimum was confirmed at **14,336 bytes** with no
-failure. The production setting was chosen with margin above that
-confirmed-safe number.
-
-File: `build/qemu_v8.mk`
-```makefile
-CFG_STACK_THREAD_EXTRA = 10240
-```
-
-**What's additional compared to 512:** this is the one setting that
-*must* be re-checked, not assumed to carry over — 512's own working value
-was sized for 512 alone, and simply wasn't guaranteed to be big enough
-once 768 also needs to run on the same shared stack.
-
----
-
-## 8. Testing both key sizes from one program
+## 7. Testing both key sizes from one program
 
 **Technically:** rather than a separate test app, the existing test TA
 gained a second command.
