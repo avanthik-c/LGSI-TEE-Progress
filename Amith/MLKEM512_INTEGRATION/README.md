@@ -897,4 +897,415 @@ individually matches known-good reference bytes.
    that the variable actually exists in your OP-TEE tree and appears in the
    generated `conf.mk`. Do **not** modify the vendored source.
 10. Build the test TA/CA from Part 8.
-11. Verify using Part 9's KAT procedure before trusting the result.
+11. Verify using Part 9's KAT procedure before trusting the result
+
+
+
+
+
+# ML-KEM-768 in OP-TEE — What Changed, and Why
+
+ML-KEM-512 already works as a real OP-TEE object type
+(`TEE_TYPE_MLKEM512_KEYPAIR`), generated through the normal
+`TEE_AllocateTransientObject()` + `TEE_GenerateKey()` calls, the same way
+RSA works. ML-KEM-768 adds a **second, independent key type** alongside
+it — same mechanism, bigger keys, and one real architectural wrinkle that
+512 never exposed.
+
+**In plain terms:** think of 512 and 768 as two different-sized engines
+built from the same blueprint. Most of the blueprint is reused as-is; a
+few parts genuinely have to be built twice because 768's parts are
+physically bigger, and one part turned out to only be needed for 768,
+never for 512.
+
+---
+
+## 1. A second copy of the crypto library, compiled with different settings
+
+**Technically:** `core/mlkem_native/mlkem_native.c` is a "bundle" file —
+it pulls in the *entire* ML-KEM implementation as one unit, and a small
+config file tells it which key size to build for. 512's config file
+(`core/mlkem_native/mlkem_native_config.h`) hardcodes "build for 512." To
+also get 768, that same bundle file gets compiled a **second time**, with
+a **second** config file that says "build for 768 instead," producing a
+separate set of functions with `768` in their names so they don't collide
+with the 512 ones.
+
+New file — `core/mlkem_native/mlkem_native_config_768.h`:
+```c
+#define MLK_CONFIG_PARAMETER_SET 768
+#define MLK_CONFIG_USE_NATIVE_BACKEND_ARITH
+#define MLK_CONFIG_USE_NATIVE_BACKEND_FIPS202
+#define MLK_CONFIG_NO_RANDOMIZED_API
+#define MLK_CONFIG_NAMESPACE_PREFIX mlkem
+#define MLK_CONFIG_ARITH_BACKEND_FILE "native/api.h"
+#define MLK_CONFIG_FIPS202_BACKEND_FILE "fips202/native/api.h"
+
+#define MLK_CONFIG_MULTILEVEL_BUILD
+#define MLK_CONFIG_MULTILEVEL_NO_SHARED
+#define MLK_CONFIG_NO_SUPERCOP
+```
+
+New file — `core/mlkem_native/mlkem_native_768.c` — this is what actually
+triggers the second compile:
+```c
+#define MLK_CONFIG_FILE "mlkem_native_config_768.h"
+#include "mlkem_native.c"
+```
+
+**In plain terms:** this doesn't duplicate any code by hand — it's the
+same source file, told to build itself differently the second time, like
+baking the same recipe twice at two different oven settings.
+
+### Why all three multilevel defines are needed — one underlying problem, three places it shows up
+
+Every one of these three settings exists to solve the same root issue:
+**two differently-sized copies of the same library, compiled separately,
+end up producing identically-named functions if nothing tells them not
+to** — and a linker cannot put two different functions under the same
+name into one final program. Each define fixes that problem at a
+different layer of the library.
+
+**`MLK_CONFIG_MULTILEVEL_BUILD` — fixes it at the public API layer.**
+Internally, the library builds its exported function names as
+`<namespace prefix>` alone, *unless* this flag is set, in which case it
+becomes `<namespace prefix><parameter set>`. Both configs use the same
+prefix (`mlkem`). Without this flag, the 512 build would export
+`mlkem_keypair_derand`, and the 768 build would *also* try to export a
+function called `mlkem_keypair_derand` — same name, two different
+implementations, linker failure. With the flag set on both, they become
+`mlkem512_keypair_derand` and `mlkem768_keypair_derand` — distinct names,
+no collision.
+
+**`MLK_CONFIG_MULTILEVEL_WITH_SHARED` (512) / `MLK_CONFIG_MULTILEVEL_NO_SHARED`
+(768) — fixes it at the internal implementation layer.** Below the public
+API, the library has code that is genuinely identical no matter which key
+size you're building — generic hashing helpers, the scalar
+rejection-sampling fallback, small buffer utilities. This code does *not*
+get the `512`/`768` suffix the public API does, because it isn't
+size-specific — which means if *both* compiled copies included it, you'd
+get two object files each defining the exact same internal function name,
+the same collision problem one layer down. `WITH_SHARED` tells the 512
+build "you are the one copy responsible for compiling this common code
+in";  `NO_SHARED` tells the 768 build "skip compiling this code — trust
+that the other build already provides it, and link against that copy
+instead of making your own." Exactly one build must carry it, or you get
+either no copy at all (both `NO_SHARED`) or two conflicting copies (both
+`WITH_SHARED`).
+
+**`MLK_CONFIG_NO_SUPERCOP` — fixes it at a third, older compatibility
+layer.** SUPERCOP is an older, cross-project benchmarking convention:
+many different crypto libraries agree to also expose their functions
+under fixed, generic names like `crypto_kem_keypair()`, regardless of
+which specific algorithm they implement, so a benchmarking harness can
+call any of them the same way. This vendored copy of mlkem-native
+includes that compatibility layer by default. In a single-size build
+there's no ambiguity — `crypto_kem_keypair()` obviously means "the one
+algorithm this build has." In a two-size build, both the 512 and 768
+copies would each try to define that *same* generic, non-namespaced name
+— a third instance of the identical collision problem. This define
+switches that compatibility layer off entirely, since there's no longer
+one unambiguous algorithm for a generic name to refer to; code has to
+call the namespaced `mlkem512_...`/`mlkem768_...` functions directly
+instead.
+
+**What's additional compared to 512:** 512's *own* config file
+(`core/mlkem_native/mlkem_native_config.h`) also had to be edited, not
+just left alone — because these three settings only make sense as a
+matched pair across both builds:
+```c
+// added to the EXISTING core/mlkem_native/mlkem_native_config.h
+#define MLK_CONFIG_MULTILEVEL_BUILD
+#define MLK_CONFIG_MULTILEVEL_WITH_SHARED
+#define MLK_CONFIG_NO_SUPERCOP
+```
+**This edit had a side effect worth knowing about**: 512's internal
+function name changed from `mlkem_keypair_derand` to
+`mlkem512_keypair_derand` the moment `MLK_CONFIG_MULTILEVEL_BUILD` was
+turned on for it — exactly the renaming mechanism explained above, now
+applying to 512 itself for the first time. The code that calls it
+(`core/mlkem_native/mlkem512_keygen.c`) had to be updated to match — not
+a bug, just a direct consequence of turning on the two-size setup at all.
+
+One file is deliberately **not** duplicated: the hand-written NEON
+assembly (`core/mlkem_native/mlkem_native_asm.S`) already contains logic
+for all three possible key sizes internally and picks the right one
+itself — it only gets compiled once, as part of 512's "shared" copy, and
+768 automatically reuses it.
+
+---
+
+## 2. Registering 768 as a real key type OP-TEE understands
+
+**Technically:** OP-TEE identifies every object type (RSA, ECC, and now
+ML-KEM-512) with a unique numeric ID. 768 needs its own ID, in the same
+family as 512's but with the next free byte.
+
+File: `lib/libutee/include/tee_api_defines.h`
+```c
+#define TEE_TYPE_MLKEM768_PUBLIC_KEY   0xA000004C
+#define TEE_TYPE_MLKEM768_KEYPAIR      0xA100004C
+#define TEE_ATTR_MLKEM768_PUBLIC_VALUE   0xD000014C
+#define TEE_ATTR_MLKEM768_PRIVATE_VALUE  0xC000024C
+```
+
+**In plain terms:** every key type in OP-TEE needs its own "ID card
+number" so the system can tell RSA keys, 512 keys, and 768 keys apart.
+This is 768 getting its ID card, using the format already established
+for 512.
+
+**What's additional compared to 512:** nothing conceptually — this is the
+exact same pattern, just a new number, since 512 already proved this
+pattern works.
+
+---
+
+## 3. The actual key-generation code
+
+**Technically:** `core/mlkem_native/mlkem768_keygen.c` is a near-copy of
+the working `core/mlkem_native/mlkem512_keygen.c`, sized for 1184-byte
+public / 2400-byte secret keys instead of 512's 800/1632.
+
+File: `core/mlkem_native/mlkem768_keygen.c`
+```c
+#define MLK_CONFIG_FILE "mlkem_native_config_768.h"   /* see note below */
+
+#include <crypto/crypto.h>
+#include <kernel/thread.h>
+#include <stdlib.h>
+#include <string.h>
+#include <string_ext.h>
+#include <tee_api_types.h>
+#include <trace.h>
+#include "mlkem_native.h"
+
+#define MLKEM768_PK_SIZE  MLKEM768_PUBLICKEYBYTES  /* 1184 */
+#define MLKEM768_SK_SIZE  MLKEM768_SECRETKEYBYTES  /* 2400 */
+#define MLKEM768_KEY_SIZE_BITS UL(MLKEM768_PK_SIZE * 8)
+
+TEE_Result crypto_acipher_alloc_mlkem768_keypair(struct mlkem768_keypair *s,
+						 size_t key_size_bits)
+{
+	if (!s || key_size_bits != MLKEM768_KEY_SIZE_BITS)
+		return TEE_ERROR_BAD_PARAMETERS;
+
+	memset(s, 0, sizeof(*s));
+	s->pub = calloc(1, MLKEM768_PK_SIZE);
+	s->priv = calloc(1, MLKEM768_SK_SIZE);
+
+	if (!s->pub || !s->priv) {
+		free(s->pub);
+		free(s->priv);
+		return TEE_ERROR_OUT_OF_MEMORY;
+	}
+	return TEE_SUCCESS;
+}
+
+TEE_Result crypto_acipher_gen_mlkem768_key(struct mlkem768_keypair *key,
+					   size_t key_size_bits)
+{
+	uint8_t coins[2 * MLKEM_SYMBYTES] __attribute__((aligned(16)));
+	int mlk_rc;
+	uint32_t vfp_state;
+
+	if (key_size_bits != MLKEM768_KEY_SIZE_BITS)
+		return TEE_ERROR_BAD_PARAMETERS;
+
+	if (crypto_rng_read(coins, sizeof(coins)) != TEE_SUCCESS)
+		return TEE_ERROR_BAD_STATE;
+
+	vfp_state = thread_kernel_enable_vfp();
+	mlk_rc = mlkem768_keypair_derand(key->pub, key->priv, coins);
+	thread_kernel_disable_vfp(vfp_state);
+
+	memzero_explicit(coins, sizeof(coins));
+
+	if (mlk_rc != 0) {
+		EMSG("mlkem768_keypair_derand failed: %d", mlk_rc);
+		return TEE_ERROR_BAD_STATE;
+	}
+	return TEE_SUCCESS;
+}
+```
+
+**In plain terms:** allocate space for the two halves of the key, get a
+truly random seed from the hardware, temporarily unlock the CPU's fast-math
+circuitry (NEON), generate the key, immediately re-lock it, and wipe the
+random seed from memory so it can't be recovered later.
+
+**What's additional compared to 512 — a real gotcha, not just a bigger
+number:** the `#define MLK_CONFIG_FILE "mlkem_native_config_768.h"` line
+at the very top is **required in this file specifically**, separately
+from the one already inside `mlkem_native_768.c`. Without it, this file
+would silently pick up 512's settings instead, and the compiler would
+complain that `mlkem768_keypair_derand` doesn't exist — because as far as
+this file could tell, it didn't. Every new file that needs to *call* the
+768 functions needs this same line at its own top; it isn't inherited
+automatically from anywhere else.
+
+Also new for 768, and not something 512 ever needed: deep inside the
+library, generating a 768-sized key requires sampling **9** polynomials
+during key generation, versus 512's exactly **4**. The library generates
+these 4-at-a-time for speed, so 512's 4 fits in one batch with nothing
+left over — 768's 9 needs two full batches plus **one leftover, handled
+one-at-a-time** by a separate, simpler function. That one-at-a-time
+function exists in the library but was never exercised by 512 at all, so
+its absence was invisible until 768 specifically needed it — it had to be
+confirmed present in the vendored source for 768 to link successfully.
+
+---
+
+## 4. Reading and writing key data (attribute plumbing)
+
+**Technically:** OP-TEE needs to know, for every key type, how to copy its
+data in from a TA, out to a TA, into permanent storage, and how to wipe it
+securely. Since 768's public key (1184 bytes) and private key (2400 bytes)
+are different sizes from each other, this needs two separate sets of
+these functions — 14 small functions total, each one a direct copy of
+512's equivalent with the byte sizes changed.
+
+File: `core/tee/tee_svc_cryp.c`
+```c
+#define ATTR_OPS_INDEX_MLKEM768_PUB   7
+#define ATTR_OPS_INDEX_MLKEM768_PRIV  8
+#define KEY_SIZE_BYTES_MLKEM768_PUB   UL(1184)
+#define KEY_SIZE_BYTES_MLKEM768_PRIV  UL(2400)
+```
+
+**In plain terms:** this is the "how do I read/write/erase this specific
+kind of data" instruction manual, one manual per key half. 768 gets its
+own two manuals, copied from 512's and relabeled with the new sizes.
+
+**What's additional compared to 512:** nothing structural — pure
+duplication with new numbers. This is the most mechanical part of the
+whole integration.
+
+---
+
+## 5. Registering the object type's shape
+
+**Technically:** one entry tells OP-TEE "here is a `TEE_TYPE_MLKEM768_KEYPAIR`
+object, here's how big it is, and here are the two attribute manuals from
+step 4 that describe its two halves":
+
+File: `core/tee/tee_svc_cryp.c`
+```c
+PROP(TEE_TYPE_MLKEM768_KEYPAIR, 1, (KEY_SIZE_BYTES_MLKEM768_PUB * 8),
+     (KEY_SIZE_BYTES_MLKEM768_PUB * 8),
+     sizeof(struct mlkem768_keypair),
+     tee_cryp_obj_mlkem768_keypair_attrs),
+```
+
+**What's additional compared to 512:** nothing — same pattern, new sizes.
+
+---
+
+## 6. Making `TEE_GenerateKey()` actually reach the 768 code
+
+**Technically:** two spots in OP-TEE's core dispatch code need a new
+`case` for the new type — one for allocating the empty key container,
+one for actually running key generation once it's called.
+
+File: `core/tee/tee_svc_cryp.c`
+```c
+// when a TA asks for storage for this key type
+case TEE_TYPE_MLKEM768_KEYPAIR:
+	res = crypto_acipher_alloc_mlkem768_keypair(o->attr, max_key_size);
+	break;
+
+// when a TA asks to actually generate the key
+case TEE_TYPE_MLKEM768_KEYPAIR:
+	res = tee_svc_obj_generate_key_mlkem768(o, type_props, key_size,
+						params, param_count);
+	if (res != TEE_SUCCESS)
+		goto out;
+	break;
+```
+
+**In plain terms:** these are the two "if the TA asked for a 768 key, go
+here" signposts in OP-TEE's switchboard. Without them, a request for a
+768 key would fall through to "unsupported type" even though everything
+else in this document exists.
+
+**What's additional compared to 512:** nothing new in kind — but this is
+inside a large switch statement with many similar-looking entries for
+other key types (RSA, ECC, 512, now 768), so it's the easiest place to
+accidentally edit or paste into the wrong spot. Not a different technique
+from 512, just a place worth double-checking by eye after editing.
+
+---
+
+## 7. Stack space — the one place 768 genuinely needs *more*, not just "the same again"
+
+**Technically:** every OP-TEE core operation runs on a fixed-size stack,
+sized by a single build setting (`CFG_STACK_THREAD_EXTRA`) that applies
+to the *entire* system, not per key type. 512's key generation needs
+roughly 10KB of scratch space at its peak; 768's needs more, roughly
+14–15KB, because generating a 768 key involves bigger matrices and more
+intermediate math. Both key types have to fit inside whatever single
+stack size the whole system is configured with.
+
+**In plain terms:** imagine one shared workbench used for both a small
+project and a bigger one — the workbench has to be sized for the *bigger*
+project, or the bigger project's parts fall off the edge. 512 alone could
+get away with a smaller workbench; supporting 768 at the same time means
+sizing the workbench for 768's needs.
+
+The real, measured minimum was confirmed at **14,336 bytes** with no
+failure. The production setting was chosen with margin above that
+confirmed-safe number.
+
+File: `build/qemu_v8.mk`
+```makefile
+CFG_STACK_THREAD_EXTRA = 10240
+```
+
+**What's additional compared to 512:** this is the one setting that
+*must* be re-checked, not assumed to carry over — 512's own working value
+was sized for 512 alone, and simply wasn't guaranteed to be big enough
+once 768 also needs to run on the same shared stack.
+
+---
+
+## 8. Testing both key sizes from one program
+
+**Technically:** rather than a separate test app, the existing test TA
+gained a second command.
+
+File: `optee_examples/mlkem_test/ta/include/ta_mlkem_test.h`
+```c
+#define TA_MLKEM_CMD_GENERATE_KEY_768   0x2
+```
+and a second handler in `optee_examples/mlkem_test/ta/mlkem_test_ta.c`,
+structured exactly like the 512 one but requesting
+`TEE_TYPE_MLKEM768_KEYPAIR` and sized for 1184/2400-byte buffers. The
+client-side program, `optee_examples/mlkem_test/host/main.c`, was refactored so both key sizes share one
+`benchmark_keygen()` helper instead of duplicating the whole
+timing-and-printing block twice, and each algorithm's output key is saved
+to its own file (`ML-KEM-512_pk.bin`, `ML-KEM-768_pk.bin`) so running both
+back-to-back doesn't overwrite one result with the other.
+
+**In plain terms:** one test program now asks OP-TEE for both a 512 key
+and a 768 key, timing each separately, and keeping their results in
+separate files it can compare later.
+
+**What's additional compared to 512:** the handler for 768 was originally
+copy-pasted from 512's and, in that copy, still asked OP-TEE for a
+`TEE_TYPE_MLKEM512_KEYPAIR` container — a mismatch caught and corrected
+to request the 768 type it was actually supposed to. Worth noting
+specifically because it's the same "which one am I actually asking for"
+mistake as the stack-space point above — easy to make when duplicating
+code that looks nearly identical at a glance.
+
+---
+
+## Where this stands
+
+Compiles, links, and runs correctly — real 1184-byte and 2400-byte keys
+come out, at real measured speed. What hasn't been done yet is the
+strongest level of proof 512 eventually reached: feeding a fixed,
+published test seed through the same code and checking the output matches
+official reference values byte-for-byte. Producing keys of the right
+*size* proves the plumbing works; matching official test vectors proves
+the actual math is correct — those are different claims, and only the
+first one has been confirmed for 768 so far..
