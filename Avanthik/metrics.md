@@ -1,15 +1,15 @@
-CPU utilization
-TA execution time
-REE <-> TEE invocation overhead
-Peak heap usage
-Peak stack usage
-CPU cycles
-CPU utilization
-Shared-memory usage
-Session establishment time
-TA loading time
-Binary/code size
-Crash/abort rate
+- CPU utilization
+- TA execution time
+- REE <-> TEE invocation overhead
+- Peak heap usage
+- Peak stack usage
+- CPU cycles
+- CPU utilization
+- Shared-memory usage
+- Session establishment time
+- TA loading time
+- Binary/code size
+- Crash/abort rate
 
 
 
